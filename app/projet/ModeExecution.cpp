@@ -38,7 +38,6 @@ namespace
     };
 
     constexpr uint8_t MASQUE_CINQ_BITS = 0x1F;
-    constexpr uint8_t NOMBRE_CAPTEURS = 5;
 
     constexpr uint8_t MASQUE_SUIVI_GAUCHE = 0b00111;
     constexpr uint8_t MASQUE_SUIVI_DROITE = 0b11100;
@@ -46,8 +45,8 @@ namespace
     constexpr uint8_t MASQUE_MUR_GAUCHE = 0b00011;
     constexpr uint8_t MASQUE_MUR_DROITE = 0b11000;
 
-    constexpr uint8_t POSITION_VOULUE_GAUCHE = 50;
-    constexpr uint16_t POSITION_VOULUE_DROITE = 350;
+    constexpr int16_t POSITION_VOULUE_GAUCHE = 50;
+    constexpr int16_t POSITION_VOULUE_DROITE = 350;
     constexpr uint16_t FACTEUR_POSITION_CAPTEUR = 100;
     constexpr int16_t POSITION_NON_DETECTEE = -1;
 
@@ -56,19 +55,28 @@ namespace
     constexpr uint8_t VITESSE_MAX = 100;
 
     constexpr uint8_t NOMBRE_LECTURES_INTERSECTION = 3;
+    constexpr uint8_t SEUIL_OBJETS_LOCAL_RANGEMENT_CAPTEURS = 3;
+
     constexpr uint16_t DELAI_AVANCE_APRES_ENTREE_MS = 300;
     constexpr uint8_t VITESSE_APPROCHE_COIN = 30;
     constexpr uint16_t DUREE_APPROCHE_COIN_MS = 150;
+
     constexpr uint16_t TIMEOUT_SEGMENT_SUD_MS = 12000;
     constexpr uint16_t TIMEOUT_SEGMENT_PRINCIPAL_MS = 20000;
     constexpr uint16_t TIMEOUT_STATIONNEMENT_MS = 4000;
     constexpr uint16_t PAS_STATIONNEMENT_MS = 10;
+
+    constexpr uint16_t TIMEOUT_REJOINDRE_LIGNE_MS = 5000;
+    constexpr uint16_t PAS_REJOINDRE_LIGNE_MS = 10;
+
     constexpr uint8_t NOMBRE_NOTES_ALERTE = 3;
     constexpr uint8_t NOTE_PAR_DEFAUT_1 = 60;
     constexpr uint8_t NOTE_PAR_DEFAUT_2 = 62;
     constexpr uint8_t NOTE_PAR_DEFAUT_3 = 64;
 
-    uint8_t obtenirMasquePertinentPourSuivi(CoteSuivi cote)
+    constexpr uint16_t NOMBRE_MILLISECONDES_PAR_SECONDE = 1000;
+
+    uint8_t obtenirMasqueSuivi(CoteSuivi cote)
     {
         return (cote == CoteSuivi::GAUCHE) ?
             MASQUE_SUIVI_GAUCHE :
@@ -89,7 +97,7 @@ namespace
         uint16_t sommePositions = 0;
         uint8_t nombreCapteursActifs = 0;
 
-        for (uint8_t i = 0; i < NOMBRE_CAPTEURS; i++) {
+        for (uint8_t i = 0; i < NOMBRE_CAPTEURS_SUIVEUR_LIGNE; i++) {
             if (capteurs & (1 << i)) {
                 sommePositions +=
                     (uint16_t)i * FACTEUR_POSITION_CAPTEUR;
@@ -121,8 +129,7 @@ namespace
                              uint8_t capteurs,
                              CoteSuivi cote)
     {
-        const uint8_t masque =
-            obtenirMasquePertinentPourSuivi(cote);
+        const uint8_t masque = obtenirMasqueSuivi(cote);
         const int16_t position =
             calculerPositionCapteurs(capteurs, masque);
 
@@ -134,7 +141,7 @@ namespace
         int16_t vitesseGauche = VITESSE_SUIVI_LIGNE;
         int16_t vitesseDroite = VITESSE_SUIVI_LIGNE;
 
-        if (position < 0) {
+        if (position == POSITION_NON_DETECTEE) {
             if (cote == CoteSuivi::GAUCHE) {
                 vitesseGauche = VITESSE_SUIVI_LIGNE -
                                 AJUSTEMENT_PERTE_LIGNE;
@@ -210,20 +217,21 @@ namespace
         tournerGauche90(moteurs);
     }
 
-    EvenementSuivi suivreJusquaEvenement(SuiveurLigne& suiveurLigne,
-                                         ControleMoteurs& moteurs,
-                                         CoteSuivi cote,
-                                         bool detecterEntree,
-                                         bool compterZones,
-                                         uint8_t& compteurZones,
-                                         BrocheIo& delLibre,
-                                         uint16_t timeoutMs)
+    EvenementSuivi suivreJusquaEvenement(
+        SuiveurLigne& suiveurLigne,
+        ControleMoteurs& moteurs,
+        CoteSuivi cote,
+        bool estDetectionEntreeActive,
+        bool estComptageZonesActif,
+        uint8_t& compteurZones,
+        BrocheIo& delLibre,
+        uint16_t timeoutMs)
     {
         const uint8_t masqueMur = obtenirMasqueMur(cote);
 
-        bool enZone = false;
-        uint16_t tempsPerteLigne = 0;
-        uint8_t compteurIntersection = 0;
+        bool estEnZone = false;
+        uint16_t dureePerteLigneMs = 0;
+        uint8_t nombreLecturesIntersection = 0;
 
         for (uint16_t tempsEcoule = 0;
              tempsEcoule < timeoutMs;
@@ -233,9 +241,9 @@ namespace
             appliquerSuiviLigne(moteurs, capteurs, cote);
 
             if (estIntersection(capteurs)) {
-                compteurIntersection++;
+                nombreLecturesIntersection++;
 
-                if (compteurIntersection >=
+                if (nombreLecturesIntersection >=
                     NOMBRE_LECTURES_INTERSECTION) {
                     moteurs.arreter();
                     delLibre.mettreAZero();
@@ -243,37 +251,37 @@ namespace
                 }
             }
             else {
-                compteurIntersection = 0;
+                nombreLecturesIntersection = 0;
             }
 
-            if (compterZones) {
+            if (estComptageZonesActif) {
                 const uint8_t capteursSansMur =
                     (capteurs & MASQUE_CINQ_BITS) &
                     (uint8_t)(~masqueMur);
 
-                const bool detectionZone =
+                const bool estZoneDetectee =
                     compterBitsActifsSur5(capteursSansMur) >=
                     SEUIL_OBJET_CAPTEURS;
 
-                if (detectionZone) {
+                if (estZoneDetectee) {
                     delLibre.mettreAUn();
 
-                    if (!enZone) {
+                    if (!estEnZone) {
                         compteurZones++;
-                        enZone = true;
+                        estEnZone = true;
                     }
                 }
                 else {
                     delLibre.mettreAZero();
-                    enZone = false;
+                    estEnZone = false;
                 }
             }
 
-            if (detecterEntree) {
-                if ((capteurs & masqueMur) == 0) {
-                    tempsPerteLigne += PERIODE_SUIVI_MS;
+            if (estDetectionEntreeActive) {
+                if (!(capteurs & masqueMur)) {
+                    dureePerteLigneMs += PERIODE_SUIVI_MS;
 
-                    if (tempsPerteLigne >=
+                    if (dureePerteLigneMs >=
                         DUREE_PERTE_LIGNE_ENTREE_MS) {
                         moteurs.arreter();
                         delLibre.mettreAZero();
@@ -281,7 +289,7 @@ namespace
                     }
                 }
                 else {
-                    tempsPerteLigne = 0;
+                    dureePerteLigneMs = 0;
                 }
             }
 
@@ -295,7 +303,7 @@ namespace
     }
 
     void jouerSequenceAlerte(Sonorite& sonorite,
-                             const uint8_t notesMidi[NOMBRE_NOTES_MIDI])
+                             const uint8_t notesMidi[NOMBRE_NOTES_ALERTE])
     {
         for (uint8_t i = 0; i < NOMBRE_NOTES_ALERTE; i++) {
             sonorite.jouerNoteMidi(notesMidi[i]);
@@ -305,17 +313,44 @@ namespace
         }
     }
 
+    bool estPersonnePresente(CapteurDistance& capteurDistance)
+    {
+        constexpr uint8_t NOMBRE_LECTURES = 5;
+        constexpr uint8_t DISTANCE_INITIALE_CM = 255;
+        constexpr uint16_t DELAI_ENTRE_LECTURES_MS = 10;
+
+        uint8_t distanceMinimaleCm = DISTANCE_INITIALE_CM;
+        bool estMesureValideTrouvee = false;
+
+        for (uint8_t i = 0; i < NOMBRE_LECTURES; i++) {
+            const uint8_t distanceCm = capteurDistance.lireDistance();
+
+            if (distanceCm != 0) {
+                estMesureValideTrouvee = true;
+
+                if (distanceCm < distanceMinimaleCm) {
+                    distanceMinimaleCm = distanceCm;
+                }
+            }
+
+            attendreMillisecondes(DELAI_ENTRE_LECTURES_MS);
+        }
+
+        return estMesureValideTrouvee &&
+               (distanceMinimaleCm <= DISTANCE_MAX_POTEAU_CM);
+    }
+
     bool evacuerPersonneSiPresente(
         CapteurDistance& capteurDistance,
         Sonorite& sonorite,
         Del& del,
-        const uint8_t notesMidi[NOMBRE_NOTES_MIDI])
+        const uint8_t notesMidi[NOMBRE_NOTES_ALERTE])
     {
-        if (!capteurDistance.objetDetecte(DISTANCE_POTEAU_CM)) {
+        if (!estPersonnePresente(capteurDistance)) {
             return false;
         }
 
-        while (capteurDistance.objetDetecte(DISTANCE_POTEAU_CM)) {
+        while (estPersonnePresente(capteurDistance)) {
             jouerSequenceAlerte(sonorite, notesMidi);
             attendreMillisecondes(PAUSE_APRES_ALERTE_MS);
         }
@@ -330,14 +365,14 @@ namespace
     }
 
     uint8_t gererLocalTravail(
-        bool entreeAGauche,
+        bool estEntreeAGauche,
         CapteurDistance& capteurDistance,
         Sonorite& sonorite,
         Del& del,
         ControleMoteurs& moteurs,
-        const uint8_t notesMidi[NOMBRE_NOTES_MIDI])
+        const uint8_t notesMidi[NOMBRE_NOTES_ALERTE])
     {
-        if (entreeAGauche) {
+        if (estEntreeAGauche) {
             tournerGauche90(moteurs);
         }
         else {
@@ -382,7 +417,7 @@ namespace
                        VITESSE_SORTIE_LOCAL,
                        DUREE_RECUL_LOCAL_TRAVAIL_MS);
 
-        if (entreeAGauche) {
+        if (estEntreeAGauche) {
             tournerDroite90(moteurs);
         }
         else {
@@ -394,12 +429,12 @@ namespace
         return nombrePersonnes;
     }
 
-    uint8_t gererLocalRangement(bool entreeAGauche,
+    uint8_t gererLocalRangement(bool estEntreeAGauche,
                                 SuiveurLigne& suiveurLigne,
                                 ControleMoteurs& moteurs,
                                 BrocheIo& delLibre)
     {
-        if (entreeAGauche) {
+        if (estEntreeAGauche) {
             tournerGauche90(moteurs);
         }
         else {
@@ -407,7 +442,7 @@ namespace
         }
 
         uint8_t nombreObjets = 0;
-        bool enObjet = false;
+        bool estSurObjet = false;
 
         moteurs.avancer(VITESSE_ENTREE_LOCAL);
 
@@ -415,20 +450,21 @@ namespace
              tempsEcoule < DUREE_AVANCE_LOCAL_RANGEMENT_MS;
              tempsEcoule += PERIODE_SUIVI_MS) {
             const uint8_t capteurs = suiveurLigne.lireCapteurs();
-            const bool objetDetecte =
-                compterBitsActifsSur5(capteurs) >= 3;
+            const bool estObjetDetecte =
+                compterBitsActifsSur5(capteurs) >=
+                SEUIL_OBJETS_LOCAL_RANGEMENT_CAPTEURS;
 
-            if (objetDetecte) {
+            if (estObjetDetecte) {
                 delLibre.mettreAUn();
 
-                if (!enObjet) {
+                if (!estSurObjet) {
                     nombreObjets++;
-                    enObjet = true;
+                    estSurObjet = true;
                 }
             }
             else {
                 delLibre.mettreAZero();
-                enObjet = false;
+                estSurObjet = false;
             }
 
             attendreMillisecondes(PERIODE_SUIVI_MS);
@@ -441,7 +477,7 @@ namespace
                        VITESSE_SORTIE_LOCAL,
                        DUREE_RECUL_LOCAL_RANGEMENT_MS);
 
-        if (entreeAGauche) {
+        if (estEntreeAGauche) {
             tournerDroite90(moteurs);
         }
         else {
@@ -451,18 +487,18 @@ namespace
         return nombreObjets;
     }
 
-    void stationnerRobot(bool arriveDuCoinEst,
+    void stationnerRobot(bool estArriveDuCoinEst,
                          uint8_t numeroStationnement,
                          SuiveurLigne& suiveurLigne,
                          ControleMoteurs& moteurs)
     {
-        if (numeroStationnement < NUMERO_STATIONNEMENT_MIN ||
-            numeroStationnement > NUMERO_STATIONNEMENT_MAX) {
+        if ((numeroStationnement < NUMERO_STATIONNEMENT_MIN) ||
+            (numeroStationnement > NUMERO_STATIONNEMENT_MAX)) {
             numeroStationnement = NUMERO_STATIONNEMENT_PAR_DEFAUT;
         }
 
         const uint16_t dureeStationnement =
-            arriveDuCoinEst ?
+            estArriveDuCoinEst ?
             TEMPS_STATIONNEMENT_DEPUIS_EST_MS[
                 numeroStationnement -
                 NUMERO_STATIONNEMENT_MIN] :
@@ -471,7 +507,7 @@ namespace
                 NUMERO_STATIONNEMENT_MIN];
 
         const CoteSuivi coteSud =
-            arriveDuCoinEst ?
+            estArriveDuCoinEst ?
             CoteSuivi::DROITE :
             CoteSuivi::GAUCHE;
 
@@ -485,7 +521,7 @@ namespace
 
         moteurs.arreter();
 
-        if (arriveDuCoinEst) {
+        if (estArriveDuCoinEst) {
             tournerDroite90(moteurs);
         }
         else {
@@ -526,10 +562,10 @@ void executerModeExecution(Del& del,
         NUMERO_STATIONNEMENT_PAR_DEFAUT
     };
 
-    const bool parametresValides =
+    const bool estLectureParametresValide =
         stockage.lireParametres(parametres);
 
-    if (!parametresValides) {
+    if (!estLectureParametresValide) {
         DEBUG_PRINT("Mode execution  parametres par defaut\n");
     }
 
@@ -546,13 +582,13 @@ void executerModeExecution(Del& del,
     moteurs.avancer(VITESSE_ENTREE_LOCAL);
 
     for (uint16_t tempsEcoule = 0;
-         tempsEcoule < 5000;
-         tempsEcoule += 10) {
+         tempsEcoule < TIMEOUT_REJOINDRE_LIGNE_MS;
+         tempsEcoule += PAS_REJOINDRE_LIGNE_MS) {
         if (suiveurLigne.estSurObjet()) {
             break;
         }
 
-        attendreMillisecondes(10);
+        attendreMillisecondes(PAS_REJOINDRE_LIGNE_MS);
     }
 
     moteurs.arreter();
@@ -562,6 +598,8 @@ void executerModeExecution(Del& del,
                    DUREE_APPROCHE_COIN_MS);
 
     if (parametres.sensParcours == SensParcours::HORAIRE) {
+        const bool estEntreeAGauche = true;
+
         tournerDroite90(moteurs);
 
         suivreJusquaEvenement(suiveurLigne,
@@ -592,8 +630,6 @@ void executerModeExecution(Del& del,
                        DUREE_APPROCHE_COIN_MS);
         tournerDroite90(moteurs);
 
-        const bool entreeAGauche = true;
-
         if (suivreJusquaEvenement(suiveurLigne,
                                   moteurs,
                                   CoteSuivi::GAUCHE,
@@ -607,7 +643,7 @@ void executerModeExecution(Del& del,
                            VITESSE_SUIVI_LIGNE,
                            DUREE_AVANCE_CENTRE_ENTREE_MS);
             resultats.nombrePersonnesLocalA =
-                gererLocalTravail(entreeAGauche,
+                gererLocalTravail(estEntreeAGauche,
                                   capteurDistance,
                                   sonorite,
                                   del,
@@ -631,7 +667,7 @@ void executerModeExecution(Del& del,
                            VITESSE_SUIVI_LIGNE,
                            DUREE_AVANCE_CENTRE_ENTREE_MS);
             resultats.nombreObjetsLocalB =
-                gererLocalRangement(entreeAGauche,
+                gererLocalRangement(estEntreeAGauche,
                                     suiveurLigne,
                                     moteurs,
                                     delLibre);
@@ -653,7 +689,7 @@ void executerModeExecution(Del& del,
                            VITESSE_SUIVI_LIGNE,
                            DUREE_AVANCE_CENTRE_ENTREE_MS);
             resultats.nombreObjetsLocalC =
-                gererLocalRangement(entreeAGauche,
+                gererLocalRangement(estEntreeAGauche,
                                     suiveurLigne,
                                     moteurs,
                                     delLibre);
@@ -675,7 +711,7 @@ void executerModeExecution(Del& del,
                            VITESSE_SUIVI_LIGNE,
                            DUREE_AVANCE_CENTRE_ENTREE_MS);
             resultats.nombrePersonnesLocalD =
-                gererLocalTravail(entreeAGauche,
+                gererLocalTravail(estEntreeAGauche,
                                   capteurDistance,
                                   sonorite,
                                   del,
@@ -720,6 +756,8 @@ void executerModeExecution(Del& del,
                         moteurs);
     }
     else {
+        const bool estEntreeAGauche = false;
+
         tournerGauche90(moteurs);
 
         suivreJusquaEvenement(suiveurLigne,
@@ -750,8 +788,6 @@ void executerModeExecution(Del& del,
                        DUREE_APPROCHE_COIN_MS);
         tournerGauche90(moteurs);
 
-        const bool entreeADroite = true;
-
         if (suivreJusquaEvenement(suiveurLigne,
                                   moteurs,
                                   CoteSuivi::DROITE,
@@ -765,7 +801,7 @@ void executerModeExecution(Del& del,
                            VITESSE_SUIVI_LIGNE,
                            DUREE_AVANCE_CENTRE_ENTREE_MS);
             resultats.nombrePersonnesLocalD =
-                gererLocalTravail(!entreeADroite,
+                gererLocalTravail(estEntreeAGauche,
                                   capteurDistance,
                                   sonorite,
                                   del,
@@ -789,7 +825,7 @@ void executerModeExecution(Del& del,
                            VITESSE_SUIVI_LIGNE,
                            DUREE_AVANCE_CENTRE_ENTREE_MS);
             resultats.nombreObjetsLocalC =
-                gererLocalRangement(!entreeADroite,
+                gererLocalRangement(estEntreeAGauche,
                                     suiveurLigne,
                                     moteurs,
                                     delLibre);
@@ -811,7 +847,7 @@ void executerModeExecution(Del& del,
                            VITESSE_SUIVI_LIGNE,
                            DUREE_AVANCE_CENTRE_ENTREE_MS);
             resultats.nombreObjetsLocalB =
-                gererLocalRangement(!entreeADroite,
+                gererLocalRangement(estEntreeAGauche,
                                     suiveurLigne,
                                     moteurs,
                                     delLibre);
@@ -833,7 +869,7 @@ void executerModeExecution(Del& del,
                            VITESSE_SUIVI_LIGNE,
                            DUREE_AVANCE_CENTRE_ENTREE_MS);
             resultats.nombrePersonnesLocalA =
-                gererLocalTravail(!entreeADroite,
+                gererLocalTravail(estEntreeAGauche,
                                   capteurDistance,
                                   sonorite,
                                   del,
@@ -881,7 +917,7 @@ void executerModeExecution(Del& del,
     stockage.ecrireResultats(resultats);
 
     sonorite.jouerNoteMidi(45);
-    attendreMillisecondes(1000);
+    attendreMillisecondes(NOMBRE_MILLISECONDES_PAR_SECONDE);
     sonorite.arreter();
 
     del.eteindre();

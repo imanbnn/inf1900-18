@@ -23,6 +23,10 @@
  *
  *   DEL libre rouge
  *       PA1
+ *
+ * Détection de poteau
+ *   Les poteaux sont autour des cadres rouges
+ *   La distance mesurée peut varier selon la position et l'angle
  */
 
 #include <stdint.h>
@@ -55,7 +59,7 @@ constexpr uint8_t SEUIL_INTERSECTION_CAPTEURS = 4;
 constexpr uint16_t DUREE_PERTE_LIGNE_ENTREE_MS = 120;
 constexpr uint8_t SEUIL_OBJET_CAPTEURS = 2;
 
-constexpr uint8_t DISTANCE_POTEAU_CM = 25;
+constexpr uint8_t DISTANCE_MAX_POTEAU_CM = 40;
 
 constexpr uint16_t DUREE_NOTE_ALERTE_MS = 250;
 constexpr uint16_t PAUSE_ENTRE_NOTES_MS = 125;
