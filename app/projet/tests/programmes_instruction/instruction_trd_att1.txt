@@ -1,0 +1,10 @@
+% Mode instruction, sens horaire
+% Notes do mi sol
+
+dbt;
+trd;
+sgo 60;
+sgo 64;
+sgo 67;
+att 1;
+fin;

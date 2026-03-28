@@ -1,0 +1,10 @@
+% Mode instruction, sens horaire
+% Notes la do mi
+
+dbt;
+trd;
+sgo 69;
+sgo 72;
+sgo 76;
+att 4;
+fin;
