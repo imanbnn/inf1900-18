@@ -38,7 +38,7 @@ CPPFILES = $(wildcard *.cpp)
 OBJDEPS = $(CPPFILES:.cpp=.o)
 DEPS = $(OBJDEPS:.o=.d)
 
-.PHONY: all clean install lib
+.PHONY: all clean install debug lib
 
 all: $(TRG) $(HEXROMTRG)
 
@@ -63,3 +63,7 @@ install: $(HEXROMTRG)
 
 clean:
 	$(REMOVE) $(TRG) $(MAPTRG) $(HEXROMTRG) $(OBJDEPS) $(DEPS)
+
+debug: CFLAGS += -DDEBUG
+debug: CXXFLAGS += -DDEBUG
+debug: clean all
