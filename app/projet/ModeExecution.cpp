@@ -9,538 +9,42 @@
  *       Sandra Timma
  */
 
+#define F_CPU 8000000UL
+
 #include "ModeExecution.h"
 
-#include "BrocheIo.h"
-#include "CapteurDistance.h"
 #include "ConfigurationProjet.h"
-#include "ControleMoteurs.h"
-#include "Debug.h"
-#include "Del.h"
+#include "Deplacements.h"
+#include "LocalRangement.h"
+#include "LocalTravail.h"
 #include "OutilsProjet.h"
-#include "Sonorite.h"
-#include "StockageProjet.h"
-#include "SuiveurLigne.h"
+#include "Stationnement.h"
+#include "SuiviLigneParcours.h"
 
 namespace
 {
-    enum class CoteSuivi : uint8_t
+    void jouerSonFinStationnement(Sonorite& sonorite)
     {
-        GAUCHE,
-        DROITE
-    };
-
-    enum class EvenementSuivi : uint8_t
-    {
-        INTERSECTION,
-        ENTREE_LOCAL,
-        TIMEOUT
-    };
-
-    constexpr uint8_t MASQUE_CINQ_BITS = 0x1F;
-
-    constexpr uint8_t MASQUE_SUIVI_GAUCHE = 0b00111;
-    constexpr uint8_t MASQUE_SUIVI_DROITE = 0b11100;
-
-    constexpr uint8_t MASQUE_MUR_GAUCHE = 0b00011;
-    constexpr uint8_t MASQUE_MUR_DROITE = 0b11000;
-
-    constexpr int16_t POSITION_VOULUE_GAUCHE = 50;
-    constexpr int16_t POSITION_VOULUE_DROITE = 350;
-    constexpr uint16_t FACTEUR_POSITION_CAPTEUR = 100;
-    constexpr int16_t POSITION_NON_DETECTEE = -1;
-
-    constexpr uint8_t AJUSTEMENT_PERTE_LIGNE = 15;
-    constexpr uint8_t VITESSE_MIN = 0;
-    constexpr uint8_t VITESSE_MAX = 100;
-
-    constexpr uint8_t NOMBRE_LECTURES_INTERSECTION = 3;
-    constexpr uint8_t SEUIL_OBJETS_LOCAL_RANGEMENT_CAPTEURS = 3;
-
-    constexpr uint16_t DELAI_AVANCE_APRES_ENTREE_MS = 300;
-    constexpr uint8_t VITESSE_APPROCHE_COIN = 30;
-    constexpr uint16_t DUREE_APPROCHE_COIN_MS = 150;
-
-    constexpr uint16_t TIMEOUT_SEGMENT_SUD_MS = 12000;
-    constexpr uint16_t TIMEOUT_SEGMENT_PRINCIPAL_MS = 20000;
-    constexpr uint16_t TIMEOUT_STATIONNEMENT_MS = 4000;
-    constexpr uint16_t PAS_STATIONNEMENT_MS = 10;
-
-    constexpr uint16_t TIMEOUT_REJOINDRE_LIGNE_MS = 5000;
-    constexpr uint16_t PAS_REJOINDRE_LIGNE_MS = 10;
-
-    constexpr uint8_t NOMBRE_NOTES_ALERTE = 3;
-    constexpr uint8_t NOTE_PAR_DEFAUT_1 = 60;
-    constexpr uint8_t NOTE_PAR_DEFAUT_2 = 62;
-    constexpr uint8_t NOTE_PAR_DEFAUT_3 = 64;
-
-    constexpr uint16_t NOMBRE_MILLISECONDES_PAR_SECONDE = 1000;
-
-    uint8_t obtenirMasqueSuivi(CoteSuivi cote)
-    {
-        return (cote == CoteSuivi::GAUCHE) ?
-            MASQUE_SUIVI_GAUCHE :
-            MASQUE_SUIVI_DROITE;
+        sonorite.jouerNoteMidi(NOTE_GRAVE_STATIONNEMENT);
+        attendreMillisecondes(DUREE_NOTE_STATIONNEMENT_MS);
+        sonorite.arreter();
     }
 
-    uint8_t obtenirMasqueMur(CoteSuivi cote)
+    void avancerJusquaDetectionLigne(SuiveurLigne& suiveurLigne,
+                                     ControleMoteurs& moteurs)
     {
-        return (cote == CoteSuivi::GAUCHE) ?
-            MASQUE_MUR_GAUCHE :
-            MASQUE_MUR_DROITE;
-    }
-
-    int16_t calculerPositionCapteurs(uint8_t capteurs, uint8_t masque)
-    {
-        capteurs &= masque;
-
-        uint16_t sommePositions = 0;
-        uint8_t nombreCapteursActifs = 0;
-
-        for (uint8_t i = 0; i < NOMBRE_CAPTEURS_SUIVEUR_LIGNE; i++) {
-            if (capteurs & (1 << i)) {
-                sommePositions +=
-                    (uint16_t)i * FACTEUR_POSITION_CAPTEUR;
-                nombreCapteursActifs++;
-            }
-        }
-
-        if (nombreCapteursActifs == 0) {
-            return POSITION_NON_DETECTEE;
-        }
-
-        return (int16_t)(sommePositions / nombreCapteursActifs);
-    }
-
-    int16_t bornerValeur(int16_t valeur, int16_t minimum, int16_t maximum)
-    {
-        if (valeur < minimum) {
-            return minimum;
-        }
-
-        if (valeur > maximum) {
-            return maximum;
-        }
-
-        return valeur;
-    }
-
-    void appliquerSuiviLigne(ControleMoteurs& moteurs,
-                             uint8_t capteurs,
-                             CoteSuivi cote)
-    {
-        const uint8_t masque = obtenirMasqueSuivi(cote);
-        const int16_t position =
-            calculerPositionCapteurs(capteurs, masque);
-
-        const int16_t positionVoulue =
-            (cote == CoteSuivi::GAUCHE) ?
-            POSITION_VOULUE_GAUCHE :
-            POSITION_VOULUE_DROITE;
-
-        int16_t vitesseGauche = VITESSE_SUIVI_LIGNE;
-        int16_t vitesseDroite = VITESSE_SUIVI_LIGNE;
-
-        if (position == POSITION_NON_DETECTEE) {
-            if (cote == CoteSuivi::GAUCHE) {
-                vitesseGauche = VITESSE_SUIVI_LIGNE -
-                                AJUSTEMENT_PERTE_LIGNE;
-                vitesseDroite = VITESSE_SUIVI_LIGNE +
-                                AJUSTEMENT_PERTE_LIGNE;
-            }
-            else {
-                vitesseGauche = VITESSE_SUIVI_LIGNE +
-                                AJUSTEMENT_PERTE_LIGNE;
-                vitesseDroite = VITESSE_SUIVI_LIGNE -
-                                AJUSTEMENT_PERTE_LIGNE;
-            }
-        }
-        else {
-            const int16_t erreur = position - positionVoulue;
-            const int16_t correction =
-                (KP_SUIVI * erreur) / FACTEUR_POSITION_CAPTEUR;
-
-            vitesseGauche = VITESSE_SUIVI_LIGNE + correction;
-            vitesseDroite = VITESSE_SUIVI_LIGNE - correction;
-        }
-
-        vitesseGauche =
-            bornerValeur(vitesseGauche, VITESSE_MIN, VITESSE_MAX);
-        vitesseDroite =
-            bornerValeur(vitesseDroite, VITESSE_MIN, VITESSE_MAX);
-
-        moteurs.ajusterVitesses((int8_t)(-vitesseGauche),
-                                (int8_t)(-vitesseDroite));
-    }
-
-    bool estIntersection(uint8_t capteurs)
-    {
-        return compterBitsActifsSur5(capteurs) >=
-               SEUIL_INTERSECTION_CAPTEURS;
-    }
-
-    void avancerPendant(ControleMoteurs& moteurs,
-                        uint8_t vitesse,
-                        uint16_t dureeMillisecondes)
-    {
-        moteurs.avancer(vitesse);
-        attendreMillisecondes(dureeMillisecondes);
-        moteurs.arreter();
-    }
-
-    void reculerPendant(ControleMoteurs& moteurs,
-                        uint8_t vitesse,
-                        uint16_t dureeMillisecondes)
-    {
-        moteurs.reculer(vitesse);
-        attendreMillisecondes(dureeMillisecondes);
-        moteurs.arreter();
-    }
-
-    void tournerGauche90(ControleMoteurs& moteurs)
-    {
-        moteurs.tournerGauche(VITESSE_TOURNER);
-        attendreMillisecondes(DUREE_TOURNER_90_MS);
-        moteurs.arreter();
-    }
-
-    void tournerDroite90(ControleMoteurs& moteurs)
-    {
-        moteurs.tournerDroite(VITESSE_TOURNER);
-        attendreMillisecondes(DUREE_TOURNER_90_MS);
-        moteurs.arreter();
-    }
-
-    void demiTour(ControleMoteurs& moteurs)
-    {
-        tournerGauche90(moteurs);
-        tournerGauche90(moteurs);
-    }
-
-    EvenementSuivi suivreJusquaEvenement(
-        SuiveurLigne& suiveurLigne,
-        ControleMoteurs& moteurs,
-        CoteSuivi cote,
-        bool estDetectionEntreeActive,
-        bool estComptageZonesActif,
-        uint8_t& compteurZones,
-        BrocheIo& delLibre,
-        uint16_t timeoutMs)
-    {
-        const uint8_t masqueMur = obtenirMasqueMur(cote);
-
-        bool estEnZone = false;
-        uint16_t dureePerteLigneMs = 0;
-        uint8_t nombreLecturesIntersection = 0;
-
-        for (uint16_t tempsEcoule = 0;
-             tempsEcoule < timeoutMs;
-             tempsEcoule += PERIODE_SUIVI_MS) {
-            const uint8_t capteurs = suiveurLigne.lireCapteurs();
-
-            appliquerSuiviLigne(moteurs, capteurs, cote);
-
-            if (estIntersection(capteurs)) {
-                nombreLecturesIntersection++;
-
-                if (nombreLecturesIntersection >=
-                    NOMBRE_LECTURES_INTERSECTION) {
-                    moteurs.arreter();
-                    delLibre.mettreAZero();
-                    return EvenementSuivi::INTERSECTION;
-                }
-            }
-            else {
-                nombreLecturesIntersection = 0;
-            }
-
-            if (estComptageZonesActif) {
-                const uint8_t capteursSansMur =
-                    (capteurs & MASQUE_CINQ_BITS) &
-                    (uint8_t)(~masqueMur);
-
-                const bool estZoneDetectee =
-                    compterBitsActifsSur5(capteursSansMur) >=
-                    SEUIL_OBJET_CAPTEURS;
-
-                if (estZoneDetectee) {
-                    delLibre.mettreAUn();
-
-                    if (!estEnZone) {
-                        compteurZones++;
-                        estEnZone = true;
-                    }
-                }
-                else {
-                    delLibre.mettreAZero();
-                    estEnZone = false;
-                }
-            }
-
-            if (estDetectionEntreeActive) {
-                if (!(capteurs & masqueMur)) {
-                    dureePerteLigneMs += PERIODE_SUIVI_MS;
-
-                    if (dureePerteLigneMs >=
-                        DUREE_PERTE_LIGNE_ENTREE_MS) {
-                        moteurs.arreter();
-                        delLibre.mettreAZero();
-                        return EvenementSuivi::ENTREE_LOCAL;
-                    }
-                }
-                else {
-                    dureePerteLigneMs = 0;
-                }
-            }
-
-            attendreMillisecondes(PERIODE_SUIVI_MS);
-        }
-
-        moteurs.arreter();
-        delLibre.mettreAZero();
-
-        return EvenementSuivi::TIMEOUT;
-    }
-
-    void jouerSequenceAlerte(Sonorite& sonorite,
-                             const uint8_t notesMidi[NOMBRE_NOTES_ALERTE])
-    {
-        for (uint8_t i = 0; i < NOMBRE_NOTES_ALERTE; i++) {
-            sonorite.jouerNoteMidi(notesMidi[i]);
-            attendreMillisecondes(DUREE_NOTE_ALERTE_MS);
-            sonorite.arreter();
-            attendreMillisecondes(PAUSE_ENTRE_NOTES_MS);
-        }
-    }
-
-    bool estPersonnePresente(CapteurDistance& capteurDistance)
-    {
-        constexpr uint8_t NOMBRE_LECTURES = 5;
-        constexpr uint8_t DISTANCE_INITIALE_CM = 255;
-        constexpr uint16_t DELAI_ENTRE_LECTURES_MS = 10;
-
-        uint8_t distanceMinimaleCm = DISTANCE_INITIALE_CM;
-        bool estMesureValideTrouvee = false;
-
-        for (uint8_t i = 0; i < NOMBRE_LECTURES; i++) {
-            const uint8_t distanceCm = capteurDistance.lireDistance();
-
-            if (distanceCm != 0) {
-                estMesureValideTrouvee = true;
-
-                if (distanceCm < distanceMinimaleCm) {
-                    distanceMinimaleCm = distanceCm;
-                }
-            }
-
-            attendreMillisecondes(DELAI_ENTRE_LECTURES_MS);
-        }
-
-        return estMesureValideTrouvee &&
-               (distanceMinimaleCm <= DISTANCE_MAX_POTEAU_CM);
-    }
-
-    bool evacuerPersonneSiPresente(
-        CapteurDistance& capteurDistance,
-        Sonorite& sonorite,
-        Del& del,
-        const uint8_t notesMidi[NOMBRE_NOTES_ALERTE])
-    {
-        if (!estPersonnePresente(capteurDistance)) {
-            return false;
-        }
-
-        while (estPersonnePresente(capteurDistance)) {
-            jouerSequenceAlerte(sonorite, notesMidi);
-            attendreMillisecondes(PAUSE_APRES_ALERTE_MS);
-        }
-
-        clignoterCouleur(del,
-                         &Del::vert,
-                         DUREE_CONFIRMATION_MS,
-                         FREQUENCE_CLIGNOTEMENT_MODE_HZ);
-        del.eteindre();
-
-        return true;
-    }
-
-    uint8_t gererLocalTravail(
-        bool estEntreeAGauche,
-        CapteurDistance& capteurDistance,
-        Sonorite& sonorite,
-        Del& del,
-        ControleMoteurs& moteurs,
-        const uint8_t notesMidi[NOMBRE_NOTES_ALERTE])
-    {
-        if (estEntreeAGauche) {
-            tournerGauche90(moteurs);
-        }
-        else {
-            tournerDroite90(moteurs);
-        }
-
-        avancerPendant(moteurs,
-                       VITESSE_ENTREE_LOCAL,
-                       DUREE_AVANCE_LOCAL_TRAVAIL_MS);
-
-        uint8_t nombrePersonnes = 0;
-
-        if (evacuerPersonneSiPresente(capteurDistance,
-                                      sonorite,
-                                      del,
-                                      notesMidi)) {
-            nombrePersonnes++;
-        }
-
-        tournerGauche90(moteurs);
-
-        if (evacuerPersonneSiPresente(capteurDistance,
-                                      sonorite,
-                                      del,
-                                      notesMidi)) {
-            nombrePersonnes++;
-        }
-
-        tournerDroite90(moteurs);
-        tournerDroite90(moteurs);
-
-        if (evacuerPersonneSiPresente(capteurDistance,
-                                      sonorite,
-                                      del,
-                                      notesMidi)) {
-            nombrePersonnes++;
-        }
-
-        tournerGauche90(moteurs);
-
-        reculerPendant(moteurs,
-                       VITESSE_SORTIE_LOCAL,
-                       DUREE_RECUL_LOCAL_TRAVAIL_MS);
-
-        if (estEntreeAGauche) {
-            tournerDroite90(moteurs);
-        }
-        else {
-            tournerGauche90(moteurs);
-        }
-
-        del.eteindre();
-
-        return nombrePersonnes;
-    }
-
-    uint8_t gererLocalRangement(bool estEntreeAGauche,
-                                SuiveurLigne& suiveurLigne,
-                                ControleMoteurs& moteurs,
-                                BrocheIo& delLibre)
-    {
-        if (estEntreeAGauche) {
-            tournerGauche90(moteurs);
-        }
-        else {
-            tournerDroite90(moteurs);
-        }
-
-        uint8_t nombreObjets = 0;
-        bool estSurObjet = false;
-
         moteurs.avancer(VITESSE_ENTREE_LOCAL);
 
-        for (uint16_t tempsEcoule = 0;
-             tempsEcoule < DUREE_AVANCE_LOCAL_RANGEMENT_MS;
-             tempsEcoule += PERIODE_SUIVI_MS) {
-            const uint8_t capteurs = suiveurLigne.lireCapteurs();
-            const bool estObjetDetecte =
-                compterBitsActifsSur5(capteurs) >=
-                SEUIL_OBJETS_LOCAL_RANGEMENT_CAPTEURS;
-
-            if (estObjetDetecte) {
-                delLibre.mettreAUn();
-
-                if (!estSurObjet) {
-                    nombreObjets++;
-                    estSurObjet = true;
-                }
-            }
-            else {
-                delLibre.mettreAZero();
-                estSurObjet = false;
-            }
-
-            attendreMillisecondes(PERIODE_SUIVI_MS);
-        }
-
-        moteurs.arreter();
-        delLibre.mettreAZero();
-
-        reculerPendant(moteurs,
-                       VITESSE_SORTIE_LOCAL,
-                       DUREE_RECUL_LOCAL_RANGEMENT_MS);
-
-        if (estEntreeAGauche) {
-            tournerDroite90(moteurs);
-        }
-        else {
-            tournerGauche90(moteurs);
-        }
-
-        return nombreObjets;
-    }
-
-    void stationnerRobot(bool estArriveDuCoinEst,
-                         uint8_t numeroStationnement,
-                         SuiveurLigne& suiveurLigne,
-                         ControleMoteurs& moteurs)
-    {
-        if ((numeroStationnement < NUMERO_STATIONNEMENT_MIN) ||
-            (numeroStationnement > NUMERO_STATIONNEMENT_MAX)) {
-            numeroStationnement = NUMERO_STATIONNEMENT_PAR_DEFAUT;
-        }
-
-        const uint16_t dureeStationnement =
-            estArriveDuCoinEst ?
-            TEMPS_STATIONNEMENT_DEPUIS_EST_MS[
-                numeroStationnement -
-                NUMERO_STATIONNEMENT_MIN] :
-            TEMPS_STATIONNEMENT_DEPUIS_OUEST_MS[
-                numeroStationnement -
-                NUMERO_STATIONNEMENT_MIN];
-
-        const CoteSuivi coteSud =
-            estArriveDuCoinEst ?
-            CoteSuivi::DROITE :
-            CoteSuivi::GAUCHE;
-
-        for (uint16_t tempsEcoule = 0;
-             tempsEcoule < dureeStationnement;
-             tempsEcoule += PERIODE_SUIVI_MS) {
-            const uint8_t capteurs = suiveurLigne.lireCapteurs();
-            appliquerSuiviLigne(moteurs, capteurs, coteSud);
-            attendreMillisecondes(PERIODE_SUIVI_MS);
-        }
-
-        moteurs.arreter();
-
-        if (estArriveDuCoinEst) {
-            tournerDroite90(moteurs);
-        }
-        else {
-            tournerGauche90(moteurs);
-        }
-
-        moteurs.avancer(VITESSE_ENTREE_LOCAL);
-
-        for (uint16_t tempsEcoule = 0;
-             tempsEcoule < TIMEOUT_STATIONNEMENT_MS;
-             tempsEcoule += PAS_STATIONNEMENT_MS) {
+        for (uint8_t i = 0; i < NOMBRE_LECTURES_DEPART_PARKING; i++) {
             if (suiveurLigne.estSurObjet()) {
                 break;
             }
 
-            attendreMillisecondes(PAS_STATIONNEMENT_MS);
+            attendreMillisecondes(PAS_DEPART_PARKING_MS);
         }
 
         moteurs.arreter();
+        attendreMillisecondes(DELAI_POST_PARKING_MS);
     }
 }
 
@@ -551,378 +55,256 @@ void executerModeExecution(Del& del,
                            Sonorite& sonorite,
                            StockageProjet& stockage)
 {
-    ParametresProjet parametres =
-    {
-        SensParcours::HORAIRE,
-        {
-            NOTE_PAR_DEFAUT_1,
-            NOTE_PAR_DEFAUT_2,
-            NOTE_PAR_DEFAUT_3
-        },
-        NUMERO_STATIONNEMENT_PAR_DEFAUT
-    };
+    ParametresProjet parametres = {};
+    parametres.sensParcours = SensParcours::HORAIRE;
+    parametres.numeroStationnement = NUMERO_STATIONNEMENT_PAR_DEFAUT;
 
-    const bool estLectureParametresValide =
-        stockage.lireParametres(parametres);
-
-    if (!estLectureParametresValide) {
-        DEBUG_PRINT("Mode execution  parametres par defaut\n");
+    for (uint8_t i = 0; i < NOMBRE_NOTES_MIDI; i++) {
+        parametres.notesMidi[i] = NOTE_PAR_DEFAUT;
     }
+
+    (void)stockage.lireParametres(parametres);
+
+    ResultatsProjet resultats = {};
 
     BrocheIo delLibre(DDRA, PORTA, BROCHE_DEL_LIBRE);
     delLibre.configurerEnSortie();
     delLibre.mettreAZero();
 
-    ResultatsProjet resultats = {0};
+    SuiviLigneParcours suiviLigneParcours(suiveurLigne,
+                                          moteurs,
+                                          delLibre);
 
-    stockage.effacerResultats();
+    Deplacements deplacements(moteurs);
 
-    demiTour(moteurs);
+    LocalTravail localTravail(capteurDistance,
+                              sonorite,
+                              del,
+                              deplacements);
 
-    moteurs.avancer(VITESSE_ENTREE_LOCAL);
-
-    for (uint16_t tempsEcoule = 0;
-         tempsEcoule < TIMEOUT_REJOINDRE_LIGNE_MS;
-         tempsEcoule += PAS_REJOINDRE_LIGNE_MS) {
-        if (suiveurLigne.estSurObjet()) {
-            break;
-        }
-
-        attendreMillisecondes(PAS_REJOINDRE_LIGNE_MS);
-    }
-
-    moteurs.arreter();
-
-    avancerPendant(moteurs,
-                   VITESSE_APPROCHE_COIN,
-                   DUREE_APPROCHE_COIN_MS);
-
-    if (parametres.sensParcours == SensParcours::HORAIRE) {
-        const bool estEntreeAGauche = true;
-
-        tournerDroite90(moteurs);
-
-        suivreJusquaEvenement(suiveurLigne,
-                              moteurs,
-                              CoteSuivi::DROITE,
-                              false,
-                              false,
-                              resultats.nombreZonesCouloirOuest,
-                              delLibre,
-                              TIMEOUT_SEGMENT_SUD_MS);
-
-        avancerPendant(moteurs,
-                       VITESSE_APPROCHE_COIN,
-                       DUREE_APPROCHE_COIN_MS);
-        tournerDroite90(moteurs);
-
-        suivreJusquaEvenement(suiveurLigne,
-                              moteurs,
-                              CoteSuivi::GAUCHE,
-                              false,
-                              true,
-                              resultats.nombreZonesCouloirOuest,
-                              delLibre,
-                              TIMEOUT_SEGMENT_PRINCIPAL_MS);
-
-        avancerPendant(moteurs,
-                       VITESSE_APPROCHE_COIN,
-                       DUREE_APPROCHE_COIN_MS);
-        tournerDroite90(moteurs);
-
-        if (suivreJusquaEvenement(suiveurLigne,
+    LocalRangement localRangement(suiveurLigne,
                                   moteurs,
-                                  CoteSuivi::GAUCHE,
-                                  true,
-                                  false,
-                                  resultats.nombreZonesCouloirOuest,
                                   delLibre,
-                                  TIMEOUT_SEGMENT_PRINCIPAL_MS) ==
-            EvenementSuivi::ENTREE_LOCAL) {
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DUREE_AVANCE_CENTRE_ENTREE_MS);
-            resultats.nombrePersonnesLocalA =
-                gererLocalTravail(estEntreeAGauche,
-                                  capteurDistance,
-                                  sonorite,
-                                  del,
-                                  moteurs,
-                                  parametres.notesMidi);
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DELAI_AVANCE_APRES_ENTREE_MS);
-        }
+                                  deplacements);
 
-        if (suivreJusquaEvenement(suiveurLigne,
-                                  moteurs,
-                                  CoteSuivi::GAUCHE,
-                                  true,
-                                  false,
-                                  resultats.nombreZonesCouloirOuest,
-                                  delLibre,
-                                  TIMEOUT_SEGMENT_PRINCIPAL_MS) ==
-            EvenementSuivi::ENTREE_LOCAL) {
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DUREE_AVANCE_CENTRE_ENTREE_MS);
-            resultats.nombreObjetsLocalB =
-                gererLocalRangement(estEntreeAGauche,
-                                    suiveurLigne,
-                                    moteurs,
-                                    delLibre);
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DELAI_AVANCE_APRES_ENTREE_MS);
-        }
+    Stationnement stationnement(suiveurLigne,
+                                moteurs,
+                                deplacements,
+                                suiviLigneParcours);
 
-        if (suivreJusquaEvenement(suiveurLigne,
-                                  moteurs,
-                                  CoteSuivi::GAUCHE,
-                                  true,
-                                  false,
-                                  resultats.nombreZonesCouloirOuest,
-                                  delLibre,
-                                  TIMEOUT_SEGMENT_PRINCIPAL_MS) ==
-            EvenementSuivi::ENTREE_LOCAL) {
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DUREE_AVANCE_CENTRE_ENTREE_MS);
-            resultats.nombreObjetsLocalC =
-                gererLocalRangement(estEntreeAGauche,
-                                    suiveurLigne,
-                                    moteurs,
-                                    delLibre);
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DELAI_AVANCE_APRES_ENTREE_MS);
-        }
+    const bool estEntreeADroite =
+        (parametres.sensParcours == SensParcours::HORAIRE);
 
-        if (suivreJusquaEvenement(suiveurLigne,
-                                  moteurs,
-                                  CoteSuivi::GAUCHE,
-                                  true,
-                                  false,
-                                  resultats.nombreZonesCouloirOuest,
-                                  delLibre,
-                                  TIMEOUT_SEGMENT_PRINCIPAL_MS) ==
-            EvenementSuivi::ENTREE_LOCAL) {
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DUREE_AVANCE_CENTRE_ENTREE_MS);
-            resultats.nombrePersonnesLocalD =
-                gererLocalTravail(estEntreeAGauche,
-                                  capteurDistance,
-                                  sonorite,
-                                  del,
-                                  moteurs,
-                                  parametres.notesMidi);
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DELAI_AVANCE_APRES_ENTREE_MS);
-        }
+    deplacements.demiTour();
+    avancerJusquaDetectionLigne(suiveurLigne, moteurs);
 
-        suivreJusquaEvenement(suiveurLigne,
-                              moteurs,
-                              CoteSuivi::GAUCHE,
-                              false,
-                              false,
-                              resultats.nombreZonesCouloirOuest,
-                              delLibre,
-                              TIMEOUT_SEGMENT_PRINCIPAL_MS);
-
-        avancerPendant(moteurs,
-                       VITESSE_APPROCHE_COIN,
-                       DUREE_APPROCHE_COIN_MS);
-        tournerDroite90(moteurs);
-
-        suivreJusquaEvenement(suiveurLigne,
-                              moteurs,
-                              CoteSuivi::GAUCHE,
-                              false,
-                              true,
-                              resultats.nombreZonesCouloirEst,
-                              delLibre,
-                              TIMEOUT_SEGMENT_PRINCIPAL_MS);
-
-        avancerPendant(moteurs,
-                       VITESSE_APPROCHE_COIN,
-                       DUREE_APPROCHE_COIN_MS);
-        tournerDroite90(moteurs);
-
-        stationnerRobot(true,
-                        parametres.numeroStationnement,
-                        suiveurLigne,
-                        moteurs);
+    if (estEntreeADroite) {
+        deplacements.tournerDroite90();
     }
     else {
-        const bool estEntreeAGauche = false;
-
-        tournerGauche90(moteurs);
-
-        suivreJusquaEvenement(suiveurLigne,
-                              moteurs,
-                              CoteSuivi::GAUCHE,
-                              false,
-                              false,
-                              resultats.nombreZonesCouloirEst,
-                              delLibre,
-                              TIMEOUT_SEGMENT_SUD_MS);
-
-        avancerPendant(moteurs,
-                       VITESSE_APPROCHE_COIN,
-                       DUREE_APPROCHE_COIN_MS);
-        tournerGauche90(moteurs);
-
-        suivreJusquaEvenement(suiveurLigne,
-                              moteurs,
-                              CoteSuivi::DROITE,
-                              false,
-                              true,
-                              resultats.nombreZonesCouloirEst,
-                              delLibre,
-                              TIMEOUT_SEGMENT_PRINCIPAL_MS);
-
-        avancerPendant(moteurs,
-                       VITESSE_APPROCHE_COIN,
-                       DUREE_APPROCHE_COIN_MS);
-        tournerGauche90(moteurs);
-
-        if (suivreJusquaEvenement(suiveurLigne,
-                                  moteurs,
-                                  CoteSuivi::DROITE,
-                                  true,
-                                  false,
-                                  resultats.nombreZonesCouloirEst,
-                                  delLibre,
-                                  TIMEOUT_SEGMENT_PRINCIPAL_MS) ==
-            EvenementSuivi::ENTREE_LOCAL) {
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DUREE_AVANCE_CENTRE_ENTREE_MS);
-            resultats.nombrePersonnesLocalD =
-                gererLocalTravail(estEntreeAGauche,
-                                  capteurDistance,
-                                  sonorite,
-                                  del,
-                                  moteurs,
-                                  parametres.notesMidi);
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DELAI_AVANCE_APRES_ENTREE_MS);
-        }
-
-        if (suivreJusquaEvenement(suiveurLigne,
-                                  moteurs,
-                                  CoteSuivi::DROITE,
-                                  true,
-                                  false,
-                                  resultats.nombreZonesCouloirEst,
-                                  delLibre,
-                                  TIMEOUT_SEGMENT_PRINCIPAL_MS) ==
-            EvenementSuivi::ENTREE_LOCAL) {
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DUREE_AVANCE_CENTRE_ENTREE_MS);
-            resultats.nombreObjetsLocalC =
-                gererLocalRangement(estEntreeAGauche,
-                                    suiveurLigne,
-                                    moteurs,
-                                    delLibre);
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DELAI_AVANCE_APRES_ENTREE_MS);
-        }
-
-        if (suivreJusquaEvenement(suiveurLigne,
-                                  moteurs,
-                                  CoteSuivi::DROITE,
-                                  true,
-                                  false,
-                                  resultats.nombreZonesCouloirEst,
-                                  delLibre,
-                                  TIMEOUT_SEGMENT_PRINCIPAL_MS) ==
-            EvenementSuivi::ENTREE_LOCAL) {
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DUREE_AVANCE_CENTRE_ENTREE_MS);
-            resultats.nombreObjetsLocalB =
-                gererLocalRangement(estEntreeAGauche,
-                                    suiveurLigne,
-                                    moteurs,
-                                    delLibre);
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DELAI_AVANCE_APRES_ENTREE_MS);
-        }
-
-        if (suivreJusquaEvenement(suiveurLigne,
-                                  moteurs,
-                                  CoteSuivi::DROITE,
-                                  true,
-                                  false,
-                                  resultats.nombreZonesCouloirEst,
-                                  delLibre,
-                                  TIMEOUT_SEGMENT_PRINCIPAL_MS) ==
-            EvenementSuivi::ENTREE_LOCAL) {
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DUREE_AVANCE_CENTRE_ENTREE_MS);
-            resultats.nombrePersonnesLocalA =
-                gererLocalTravail(estEntreeAGauche,
-                                  capteurDistance,
-                                  sonorite,
-                                  del,
-                                  moteurs,
-                                  parametres.notesMidi);
-            avancerPendant(moteurs,
-                           VITESSE_SUIVI_LIGNE,
-                           DELAI_AVANCE_APRES_ENTREE_MS);
-        }
-
-        suivreJusquaEvenement(suiveurLigne,
-                              moteurs,
-                              CoteSuivi::DROITE,
-                              false,
-                              false,
-                              resultats.nombreZonesCouloirEst,
-                              delLibre,
-                              TIMEOUT_SEGMENT_PRINCIPAL_MS);
-
-        avancerPendant(moteurs,
-                       VITESSE_APPROCHE_COIN,
-                       DUREE_APPROCHE_COIN_MS);
-        tournerGauche90(moteurs);
-
-        suivreJusquaEvenement(suiveurLigne,
-                              moteurs,
-                              CoteSuivi::DROITE,
-                              false,
-                              true,
-                              resultats.nombreZonesCouloirOuest,
-                              delLibre,
-                              TIMEOUT_SEGMENT_PRINCIPAL_MS);
-
-        avancerPendant(moteurs,
-                       VITESSE_APPROCHE_COIN,
-                       DUREE_APPROCHE_COIN_MS);
-        tournerGauche90(moteurs);
-
-        stationnerRobot(false,
-                        parametres.numeroStationnement,
-                        suiveurLigne,
-                        moteurs);
+        deplacements.tournerGauche90();
     }
 
-    stockage.ecrireResultats(resultats);
+    const CoteSuivi coteSuivi =
+        estEntreeADroite ? CoteSuivi::DROITE : CoteSuivi::GAUCHE;
 
-    sonorite.jouerNoteMidi(45);
-    attendreMillisecondes(NOMBRE_MILLISECONDES_PAR_SECONDE);
-    sonorite.arreter();
+    OptionsSuivi optionsCouloir =
+    {
+        false,
+        true,
+        TIMEOUT_SEGMENT_SUD_MS,
+        &resultats.nombreZonesCouloirOuest
+    };
 
-    del.eteindre();
+    EvenementSuivi evenement =
+        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
+                                                 optionsCouloir);
+
+    if (evenement == EvenementSuivi::INTERSECTION) {
+        if (estEntreeADroite) {
+            deplacements.tournerGauche90();
+        }
+        else {
+            deplacements.tournerDroite90();
+        }
+    }
+
+    OptionsSuivi optionsEntreeLocal =
+    {
+        true,
+        false,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
+        nullptr
+    };
+
+    evenement =
+        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
+                                                 optionsEntreeLocal);
+
+    if (evenement == EvenementSuivi::ENTREE_LOCAL) {
+        deplacements.avancerPendant(VITESSE_SUIVI_LIGNE,
+                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
+
+        resultats.nombrePersonnesLocalD =
+            localTravail.gerer(!estEntreeADroite,
+                               parametres.notesMidi);
+
+        moteurs.avancer(VITESSE_SORTIE_LOCAL);
+        attendreMillisecondes(DELAI_AVANCE_APRES_ENTREE_MS);
+        moteurs.arreter();
+    }
+
+    OptionsSuivi optionsCouloirHaut =
+    {
+        false,
+        false,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
+        nullptr
+    };
+
+    evenement =
+        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
+                                                 optionsCouloirHaut);
+
+    if (evenement == EvenementSuivi::INTERSECTION) {
+        if (estEntreeADroite) {
+            deplacements.tournerGauche90();
+        }
+        else {
+            deplacements.tournerDroite90();
+        }
+    }
+
+    OptionsSuivi optionsLocalRangement =
+    {
+        true,
+        false,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
+        nullptr
+    };
+
+    evenement =
+        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
+                                                 optionsLocalRangement);
+
+    if (evenement == EvenementSuivi::ENTREE_LOCAL) {
+        deplacements.avancerPendant(VITESSE_SUIVI_LIGNE,
+                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
+
+        resultats.nombreObjetsLocalC =
+            localRangement.gerer(!estEntreeADroite);
+
+        moteurs.avancer(VITESSE_SORTIE_LOCAL);
+        attendreMillisecondes(DELAI_AVANCE_APRES_ENTREE_MS);
+        moteurs.arreter();
+    }
+
+    OptionsSuivi optionsCouloirEst =
+    {
+        false,
+        true,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
+        &resultats.nombreZonesCouloirEst
+    };
+
+    evenement =
+        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
+                                                 optionsCouloirEst);
+
+    if (evenement == EvenementSuivi::INTERSECTION) {
+        if (estEntreeADroite) {
+            deplacements.tournerGauche90();
+        }
+        else {
+            deplacements.tournerDroite90();
+        }
+    }
+
+    OptionsSuivi optionsLocalA =
+    {
+        true,
+        false,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
+        nullptr
+    };
+
+    evenement =
+        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
+                                                 optionsLocalA);
+
+    if (evenement == EvenementSuivi::ENTREE_LOCAL) {
+        deplacements.avancerPendant(VITESSE_SUIVI_LIGNE,
+                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
+
+        resultats.nombrePersonnesLocalA =
+            localTravail.gerer(!estEntreeADroite,
+                               parametres.notesMidi);
+
+        moteurs.avancer(VITESSE_SORTIE_LOCAL);
+        attendreMillisecondes(DELAI_AVANCE_APRES_ENTREE_MS);
+        moteurs.arreter();
+    }
+
+    OptionsSuivi optionsCouloirBas =
+    {
+        false,
+        false,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
+        nullptr
+    };
+
+    evenement =
+        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
+                                                 optionsCouloirBas);
+
+    if (evenement == EvenementSuivi::INTERSECTION) {
+        if (estEntreeADroite) {
+            deplacements.tournerGauche90();
+        }
+        else {
+            deplacements.tournerDroite90();
+        }
+    }
+
+    OptionsSuivi optionsLocalB =
+    {
+        true,
+        false,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
+        nullptr
+    };
+
+    evenement =
+        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
+                                                 optionsLocalB);
+
+    if (evenement == EvenementSuivi::ENTREE_LOCAL) {
+        deplacements.avancerPendant(VITESSE_SUIVI_LIGNE,
+                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
+
+        resultats.nombreObjetsLocalB =
+            localRangement.gerer(!estEntreeADroite);
+
+        moteurs.avancer(VITESSE_SORTIE_LOCAL);
+        attendreMillisecondes(DELAI_AVANCE_APRES_ENTREE_MS);
+        moteurs.arreter();
+    }
+
+    if (evenement == EvenementSuivi::INTERSECTION) {
+        if (estEntreeADroite) {
+            deplacements.tournerGauche90();
+        }
+        else {
+            deplacements.tournerDroite90();
+        }
+    }
+
+    stationnement.executer(estEntreeADroite,
+                           parametres.numeroStationnement);
+
+    jouerSonFinStationnement(sonorite);
+
     delLibre.mettreAZero();
 
-    while (true) {
-    }
+    (void)stockage.ecrireResultats(resultats);
 }
