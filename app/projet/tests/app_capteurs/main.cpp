@@ -53,23 +53,15 @@ namespace
     };
 
     const PointDistance TABLE_DISTANCE[] =
-    {
-        { 700, 10 },
-        { 500, 15 },
-        { 400, 20 },
-        { 320, 25 },
-        { 270, 30 },
-        { 230, 35 },
-        { 200, 40 },
-        { 175, 45 },
-        { 155, 50 },
-        { 140, 55 },
-        { 125, 60 },
-        { 115, 65 },
-        { 105, 70 },
-        {  98, 75 },
-        {  92, 80 }
-    };
+{
+    { 500, 10 },
+    { 255, 20 },
+    { 167, 30 },
+    { 114, 40 },
+    {  87, 50 },
+    {  68, 60 },
+    {  58, 80 }
+};
 
     constexpr uint8_t TAILLE_TABLE_DISTANCE =
         (uint8_t)(sizeof(TABLE_DISTANCE) / sizeof(TABLE_DISTANCE[0]));
