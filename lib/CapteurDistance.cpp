@@ -20,6 +20,9 @@
 
 #include "CapteurDistance.h"
 
+#define F_CPU 8000000UL
+#include <util/delay.h>
+
 namespace
 {
     struct PointCalibration
