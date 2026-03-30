@@ -7,44 +7,119 @@
  *       Kaouthar Nouadir
  *       Paul-Erwin Koffi
  *       Sandra Timma
+ *
+ * Description
+ *   Implémentation du mode exécution
  */
-
-#define F_CPU 8000000UL
 
 #include "ModeExecution.h"
 
+#include "CapteurDistance.h"
 #include "ConfigurationProjet.h"
+#include "ControleMoteurs.h"
 #include "Deplacements.h"
+#include "Del.h"
 #include "LocalRangement.h"
 #include "LocalTravail.h"
 #include "OutilsProjet.h"
+#include "Sonorite.h"
 #include "Stationnement.h"
+#include "StockageProjet.h"
+#include "SuiveurLigne.h"
 #include "SuiviLigneParcours.h"
 
 namespace
 {
-    void jouerSonFinStationnement(Sonorite& sonorite)
+    constexpr uint8_t NOMBRE_LOCAUX = 4;
+    constexpr uint8_t INDICE_LOCAL_A = 0;
+    constexpr uint8_t INDICE_LOCAL_B = 1;
+    constexpr uint8_t INDICE_LOCAL_C = 2;
+    constexpr uint8_t INDICE_LOCAL_D = 3;
+
+    void avancerJusquaDetectionLigne(ControleMoteurs& moteurs,
+                                     SuiveurLigne& suiveurLigne)
     {
-        sonorite.jouerNoteMidi(NOTE_GRAVE_STATIONNEMENT);
-        attendreMillisecondes(DUREE_NOTE_STATIONNEMENT_MS);
-        sonorite.arreter();
-    }
+        moteurs.avancer(VITESSE_SUIVI_LIGNE);
 
-    void avancerJusquaDetectionLigne(SuiveurLigne& suiveurLigne,
-                                     ControleMoteurs& moteurs)
-    {
-        moteurs.avancer(VITESSE_ENTREE_LOCAL);
-
-        for (uint8_t i = 0; i < NOMBRE_LECTURES_DEPART_PARKING; i++) {
-            if (suiveurLigne.estSurObjet()) {
-                break;
-            }
-
-            attendreMillisecondes(PAS_DEPART_PARKING_MS);
+        while (!suiveurLigne.estSurObjet()) {
+            attendreMillisecondes(PERIODE_SUIVI_MS);
         }
 
         moteurs.arreter();
-        attendreMillisecondes(DELAI_POST_PARKING_MS);
+    }
+
+
+    void jouerSonGraveFin(Sonorite& sonorite)
+    {
+        sonorite.jouerNoteMidi(NOTE_GRAVE_FIN_MIDI);
+        attendreMillisecondes(DUREE_SON_GRAVE_FIN_MS);
+        sonorite.arreter();
+    }
+
+
+    void effectuerVirageCoin(Deplacements& deplacements,
+                             bool estHoraire)
+    {
+        if (estHoraire) {
+            deplacements.tournerDroite90();
+        }
+        else {
+            deplacements.tournerGauche90();
+        }
+    }
+
+
+    void gererLocalTravail(Deplacements& deplacements,
+                           LocalTravail& localTravail,
+                           bool estEntreeAGauche,
+                           const uint8_t notesMidi[],
+                           uint8_t& nombrePersonnes)
+    {
+        deplacements.avancerPendant(VITESSE_ENTREE_LOCAL,
+                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
+
+        nombrePersonnes = localTravail.gerer(estEntreeAGauche,
+                                             notesMidi);
+
+        deplacements.avancerPendant(VITESSE_ENTREE_LOCAL,
+                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
+    }
+
+
+    void gererLocalRangement(Deplacements& deplacements,
+                             LocalRangement& localRangement,
+                             bool estEntreeAGauche,
+                             uint8_t& nombreObjets)
+    {
+        deplacements.avancerPendant(VITESSE_ENTREE_LOCAL,
+                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
+
+        nombreObjets = localRangement.gerer(estEntreeAGauche);
+
+        deplacements.avancerPendant(VITESSE_ENTREE_LOCAL,
+                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
+    }
+
+
+    bool suivreSegment(SuiviLigneParcours& suiviParcours,
+                       CoteSuivi coteSuivi,
+                       const OptionsSuivi& options,
+                       EvenementSuivi evenementAttendu)
+    {
+        return suiviParcours.suivreJusquaEvenement(coteSuivi,
+                                                   options) ==
+               evenementAttendu;
+    }
+
+
+    uint8_t obtenirIndiceLocalResultat(uint8_t indiceParcours,
+                                       bool estHoraire)
+    {
+        if (estHoraire) {
+            return indiceParcours;
+        }
+
+        return (NOMBRE_LOCAUX - 1) - indiceParcours;
     }
 }
 
@@ -56,255 +131,143 @@ void executerModeExecution(Del& del,
                            StockageProjet& stockage)
 {
     ParametresProjet parametres = {};
-    parametres.sensParcours = SensParcours::HORAIRE;
-    parametres.numeroStationnement = NUMERO_STATIONNEMENT_PAR_DEFAUT;
 
-    for (uint8_t i = 0; i < NOMBRE_NOTES_MIDI; i++) {
-        parametres.notesMidi[i] = NOTE_PAR_DEFAUT;
+    if (!stockage.lireParametres(parametres)) {
+        return;
     }
-
-    (void)stockage.lireParametres(parametres);
 
     ResultatsProjet resultats = {};
 
-    BrocheIo delLibre(DDRA, PORTA, BROCHE_DEL_LIBRE);
-    delLibre.configurerEnSortie();
-    delLibre.mettreAZero();
-
-    SuiviLigneParcours suiviLigneParcours(suiveurLigne,
-                                          moteurs,
-                                          delLibre);
+    const bool estHoraire =
+        (parametres.sensParcours == SensParcours::HORAIRE);
+    const CoteSuivi coteSuiviPerimetre =
+        estHoraire ? CoteSuivi::DROITE : CoteSuivi::GAUCHE;
+    const CoteSuivi coteSuiviLocaux =
+        estHoraire ? CoteSuivi::GAUCHE : CoteSuivi::DROITE;
+    const bool estEntreeLocauxAGauche = estHoraire;
 
     Deplacements deplacements(moteurs);
-
-    LocalTravail localTravail(capteurDistance,
-                              sonorite,
-                              del,
-                              deplacements);
-
-    LocalRangement localRangement(suiveurLigne,
-                                  moteurs,
-                                  delLibre,
-                                  deplacements);
-
+    SuiviLigneParcours suiviParcours(suiveurLigne, moteurs, del);
+    LocalTravail localTravail(capteurDistance, sonorite, del, deplacements);
+    LocalRangement localRangement(suiveurLigne, moteurs, del, deplacements);
     Stationnement stationnement(suiveurLigne,
                                 moteurs,
                                 deplacements,
-                                suiviLigneParcours);
+                                suiviParcours);
 
-    const bool estEntreeADroite =
-        (parametres.sensParcours == SensParcours::HORAIRE);
+    const OptionsSuivi optionsIntersection =
+    {
+        false,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
+        false,
+        nullptr
+    };
 
-    deplacements.demiTour();
-    avancerJusquaDetectionLigne(suiveurLigne, moteurs);
-
-    if (estEntreeADroite) {
-        deplacements.tournerDroite90();
-    }
-    else {
-        deplacements.tournerGauche90();
-    }
-
-    const CoteSuivi coteSuivi =
-        estEntreeADroite ? CoteSuivi::DROITE : CoteSuivi::GAUCHE;
+    const OptionsSuivi optionsEntreeLocal =
+    {
+        true,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
+        false,
+        nullptr
+    };
 
     OptionsSuivi optionsCouloir =
     {
         false,
+        TIMEOUT_SEGMENT_PRINCIPAL_MS,
         true,
-        TIMEOUT_SEGMENT_SUD_MS,
-        &resultats.nombreZonesCouloirOuest
+        nullptr
     };
 
-    EvenementSuivi evenement =
-        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
-                                                 optionsCouloir);
+    deplacements.demiTour();
+    avancerJusquaDetectionLigne(moteurs, suiveurLigne);
+    effectuerVirageCoin(deplacements, estHoraire);
 
-    if (evenement == EvenementSuivi::INTERSECTION) {
-        if (estEntreeADroite) {
-            deplacements.tournerGauche90();
+    if (!suivreSegment(suiviParcours,
+                       coteSuiviPerimetre,
+                       optionsIntersection,
+                       EvenementSuivi::INTERSECTION)) {
+        return;
+    }
+
+    effectuerVirageCoin(deplacements, estHoraire);
+
+    optionsCouloir.compteurZones =
+        estHoraire ? &resultats.nombreZonesCouloirOuest
+                   : &resultats.nombreZonesCouloirEst;
+
+    if (!suivreSegment(suiviParcours,
+                       coteSuiviPerimetre,
+                       optionsCouloir,
+                       EvenementSuivi::INTERSECTION)) {
+        return;
+    }
+
+    effectuerVirageCoin(deplacements, estHoraire);
+
+    for (uint8_t i = 0; i < NOMBRE_LOCAUX; i++) {
+        if (!suivreSegment(suiviParcours,
+                           coteSuiviLocaux,
+                           optionsEntreeLocal,
+                           EvenementSuivi::ENTREE_LOCAL)) {
+            return;
+        }
+
+        const uint8_t indiceLocalResultat =
+            obtenirIndiceLocalResultat(i, estHoraire);
+
+        if (indiceLocalResultat == INDICE_LOCAL_A) {
+            gererLocalTravail(deplacements,
+                              localTravail,
+                              estEntreeLocauxAGauche,
+                              parametres.notesMidi,
+                              resultats.nombrePersonnesLocalA);
+        }
+        else if (indiceLocalResultat == INDICE_LOCAL_B) {
+            gererLocalRangement(deplacements,
+                                localRangement,
+                                estEntreeLocauxAGauche,
+                                resultats.nombreObjetsLocalB);
+        }
+        else if (indiceLocalResultat == INDICE_LOCAL_C) {
+            gererLocalRangement(deplacements,
+                                localRangement,
+                                estEntreeLocauxAGauche,
+                                resultats.nombreObjetsLocalC);
         }
         else {
-            deplacements.tournerDroite90();
+            gererLocalTravail(deplacements,
+                              localTravail,
+                              estEntreeLocauxAGauche,
+                              parametres.notesMidi,
+                              resultats.nombrePersonnesLocalD);
         }
     }
 
-    OptionsSuivi optionsEntreeLocal =
-    {
-        true,
-        false,
-        TIMEOUT_SEGMENT_PRINCIPAL_MS,
-        nullptr
-    };
-
-    evenement =
-        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
-                                                 optionsEntreeLocal);
-
-    if (evenement == EvenementSuivi::ENTREE_LOCAL) {
-        deplacements.avancerPendant(VITESSE_SUIVI_LIGNE,
-                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
-
-        resultats.nombrePersonnesLocalD =
-            localTravail.gerer(!estEntreeADroite,
-                               parametres.notesMidi);
-
-        moteurs.avancer(VITESSE_SORTIE_LOCAL);
-        attendreMillisecondes(DELAI_AVANCE_APRES_ENTREE_MS);
-        moteurs.arreter();
+    if (!suivreSegment(suiviParcours,
+                       coteSuiviLocaux,
+                       optionsIntersection,
+                       EvenementSuivi::INTERSECTION)) {
+        return;
     }
 
-    OptionsSuivi optionsCouloirHaut =
-    {
-        false,
-        false,
-        TIMEOUT_SEGMENT_PRINCIPAL_MS,
-        nullptr
-    };
+    effectuerVirageCoin(deplacements, estHoraire);
 
-    evenement =
-        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
-                                                 optionsCouloirHaut);
+    optionsCouloir.compteurZones =
+        estHoraire ? &resultats.nombreZonesCouloirEst
+                   : &resultats.nombreZonesCouloirOuest;
 
-    if (evenement == EvenementSuivi::INTERSECTION) {
-        if (estEntreeADroite) {
-            deplacements.tournerGauche90();
-        }
-        else {
-            deplacements.tournerDroite90();
-        }
+    if (!suivreSegment(suiviParcours,
+                       coteSuiviPerimetre,
+                       optionsCouloir,
+                       EvenementSuivi::INTERSECTION)) {
+        return;
     }
 
-    OptionsSuivi optionsLocalRangement =
-    {
-        true,
-        false,
-        TIMEOUT_SEGMENT_PRINCIPAL_MS,
-        nullptr
-    };
+    effectuerVirageCoin(deplacements, estHoraire);
+    stationnement.executer(estHoraire, parametres.numeroStationnement);
+    jouerSonGraveFin(sonorite);
+    del.eteindre();
 
-    evenement =
-        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
-                                                 optionsLocalRangement);
-
-    if (evenement == EvenementSuivi::ENTREE_LOCAL) {
-        deplacements.avancerPendant(VITESSE_SUIVI_LIGNE,
-                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
-
-        resultats.nombreObjetsLocalC =
-            localRangement.gerer(!estEntreeADroite);
-
-        moteurs.avancer(VITESSE_SORTIE_LOCAL);
-        attendreMillisecondes(DELAI_AVANCE_APRES_ENTREE_MS);
-        moteurs.arreter();
-    }
-
-    OptionsSuivi optionsCouloirEst =
-    {
-        false,
-        true,
-        TIMEOUT_SEGMENT_PRINCIPAL_MS,
-        &resultats.nombreZonesCouloirEst
-    };
-
-    evenement =
-        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
-                                                 optionsCouloirEst);
-
-    if (evenement == EvenementSuivi::INTERSECTION) {
-        if (estEntreeADroite) {
-            deplacements.tournerGauche90();
-        }
-        else {
-            deplacements.tournerDroite90();
-        }
-    }
-
-    OptionsSuivi optionsLocalA =
-    {
-        true,
-        false,
-        TIMEOUT_SEGMENT_PRINCIPAL_MS,
-        nullptr
-    };
-
-    evenement =
-        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
-                                                 optionsLocalA);
-
-    if (evenement == EvenementSuivi::ENTREE_LOCAL) {
-        deplacements.avancerPendant(VITESSE_SUIVI_LIGNE,
-                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
-
-        resultats.nombrePersonnesLocalA =
-            localTravail.gerer(!estEntreeADroite,
-                               parametres.notesMidi);
-
-        moteurs.avancer(VITESSE_SORTIE_LOCAL);
-        attendreMillisecondes(DELAI_AVANCE_APRES_ENTREE_MS);
-        moteurs.arreter();
-    }
-
-    OptionsSuivi optionsCouloirBas =
-    {
-        false,
-        false,
-        TIMEOUT_SEGMENT_PRINCIPAL_MS,
-        nullptr
-    };
-
-    evenement =
-        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
-                                                 optionsCouloirBas);
-
-    if (evenement == EvenementSuivi::INTERSECTION) {
-        if (estEntreeADroite) {
-            deplacements.tournerGauche90();
-        }
-        else {
-            deplacements.tournerDroite90();
-        }
-    }
-
-    OptionsSuivi optionsLocalB =
-    {
-        true,
-        false,
-        TIMEOUT_SEGMENT_PRINCIPAL_MS,
-        nullptr
-    };
-
-    evenement =
-        suiviLigneParcours.suivreJusquaEvenement(coteSuivi,
-                                                 optionsLocalB);
-
-    if (evenement == EvenementSuivi::ENTREE_LOCAL) {
-        deplacements.avancerPendant(VITESSE_SUIVI_LIGNE,
-                                    DUREE_AVANCE_CENTRE_ENTREE_MS);
-
-        resultats.nombreObjetsLocalB =
-            localRangement.gerer(!estEntreeADroite);
-
-        moteurs.avancer(VITESSE_SORTIE_LOCAL);
-        attendreMillisecondes(DELAI_AVANCE_APRES_ENTREE_MS);
-        moteurs.arreter();
-    }
-
-    if (evenement == EvenementSuivi::INTERSECTION) {
-        if (estEntreeADroite) {
-            deplacements.tournerGauche90();
-        }
-        else {
-            deplacements.tournerDroite90();
-        }
-    }
-
-    stationnement.executer(estEntreeADroite,
-                           parametres.numeroStationnement);
-
-    jouerSonFinStationnement(sonorite);
-
-    delLibre.mettreAZero();
-
-    (void)stockage.ecrireResultats(resultats);
+    stockage.ecrireResultats(resultats);
 }

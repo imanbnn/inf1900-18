@@ -7,6 +7,9 @@
  *       Kaouthar Nouadir
  *       Paul-Erwin Koffi
  *       Sandra Timma
+ *
+ * Description
+ *   Implémentation de la classe responsable du traitement du local de travail
  */
 
 #include "LocalTravail.h"
@@ -35,6 +38,7 @@ LocalTravail::LocalTravail(CapteurDistance& capteurDistance,
       deplacements_(deplacements)
 {
 }
+
 
 uint8_t LocalTravail::gerer(bool estEntreeAGauche,
                             const uint8_t notesMidi[])
@@ -78,16 +82,17 @@ uint8_t LocalTravail::gerer(bool estEntreeAGauche,
     return nombrePersonnesEvacuees;
 }
 
+
 bool LocalTravail::evacuerPersonneSiPresente_(const uint8_t notesMidi[])
 {
-    if (!capteurDistance_.objetDetecte(DISTANCE_MAX_POTEAU_CM)) {
+    if (!capteurDistance_.objetDetecte(DISTANCE_POTEAU_CM)) {
         return false;
     }
 
-    const uint8_t distanceSortieCm =
-        DISTANCE_MAX_POTEAU_CM + HYSTERESIS_DISTANCE_POTEAU_CM;
+    const uint8_t distanceSortiePoteauCm =
+        DISTANCE_POTEAU_CM + HYSTERESIS_DISTANCE_POTEAU_CM;
 
-    while (capteurDistance_.objetDetecte(distanceSortieCm)) {
+    while (capteurDistance_.objetDetecte(distanceSortiePoteauCm)) {
         jouerSequenceAlerte_(notesMidi);
         attendreMillisecondes(PAUSE_APRES_ALERTE_MS);
     }
@@ -96,6 +101,7 @@ bool LocalTravail::evacuerPersonneSiPresente_(const uint8_t notesMidi[])
 
     return true;
 }
+
 
 void LocalTravail::jouerSequenceAlerte_(const uint8_t notesMidi[])
 {
@@ -110,6 +116,7 @@ void LocalTravail::jouerSequenceAlerte_(const uint8_t notesMidi[])
         attendreMillisecondes(PAUSE_ENTRE_NOTES_MS);
     }
 }
+
 
 void LocalTravail::confirmerEvacuation_()
 {

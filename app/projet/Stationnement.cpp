@@ -7,6 +7,9 @@
  *       Kaouthar Nouadir
  *       Paul-Erwin Koffi
  *       Sandra Timma
+ *
+ * Description
+ *   Implémentation de la classe responsable du stationnement
  */
 
 #include "Stationnement.h"
@@ -17,12 +20,6 @@
 #include "OutilsProjet.h"
 #include "SuiveurLigne.h"
 #include "SuiviLigneParcours.h"
-
-namespace
-{
-    constexpr uint8_t NUMERO_STATIONNEMENT_MIN = 1;
-    constexpr uint8_t NUMERO_STATIONNEMENT_MAX = NOMBRE_STATIONNEMENTS;
-}
 
 Stationnement::Stationnement(SuiveurLigne& suiveurLigne,
                              ControleMoteurs& moteurs,
@@ -35,39 +32,39 @@ Stationnement::Stationnement(SuiveurLigne& suiveurLigne,
 {
 }
 
+
 void Stationnement::executer(bool estCoinEst,
                              uint8_t numeroStationnement)
 {
-    if (numeroStationnement < NUMERO_STATIONNEMENT_MIN) {
-        numeroStationnement = NUMERO_STATIONNEMENT_MIN;
+    uint8_t numeroStationnementCorrige = numeroStationnement;
+
+    if (numeroStationnementCorrige < NUMERO_STATIONNEMENT_MIN) {
+        numeroStationnementCorrige = NUMERO_STATIONNEMENT_MIN;
     }
 
-    if (numeroStationnement > NUMERO_STATIONNEMENT_MAX) {
-        numeroStationnement = NUMERO_STATIONNEMENT_MAX;
+    if (numeroStationnementCorrige > NUMERO_STATIONNEMENT_MAX) {
+        numeroStationnementCorrige = NUMERO_STATIONNEMENT_MAX;
     }
-
-    uint8_t nombreReperesPasses = 0;
-    bool etaitSurReperePrecedent = false;
 
     const CoteSuivi coteSuivi =
         estCoinEst ? CoteSuivi::GAUCHE : CoteSuivi::DROITE;
 
-    while (nombreReperesPasses < numeroStationnement) {
+    uint8_t nombreReperesPasses = 0;
+    bool etaitSurRepere = false;
+
+    while (nombreReperesPasses < numeroStationnementCorrige) {
         const uint8_t capteurs = suiveurLigne_.lireCapteurs();
-
-        suiviLigne_.ajusterMoteursSelonLigne(capteurs,
-                                             coteSuivi);
-
-        const bool estSurRepere =
+        const bool estRepere =
             compterBitsActifsSur5(capteurs) >=
-            SEUIL_INTERSECTION_CAPTEURS;
+            SEUIL_REPERE_STATIONNEMENT_CAPTEURS;
 
-        if (estSurRepere && !etaitSurReperePrecedent) {
+        suiviLigne_.ajusterSuiviSelonCapteurs(capteurs, coteSuivi);
+
+        if (estRepere && !etaitSurRepere) {
             nombreReperesPasses++;
         }
 
-        etaitSurReperePrecedent = estSurRepere;
-
+        etaitSurRepere = estRepere;
         attendreMillisecondes(PERIODE_SUIVI_MS);
     }
 
@@ -87,10 +84,11 @@ void Stationnement::executer(bool estCoinEst,
 
     uint16_t tempsEcouleMillisecondes = 0;
     uint8_t nombreLecturesConsecutives = 0;
+    bool estRepereStationnementConfirme = false;
 
-    while (tempsEcouleMillisecondes < TIMEOUT_STATIONNEMENT_MS) {
+    while ((tempsEcouleMillisecondes < TIMEOUT_STATIONNEMENT_MS) &&
+           !estRepereStationnementConfirme) {
         const uint8_t capteurs = suiveurLigne_.lireCapteurs();
-
         const bool estRepereStationnement =
             compterBitsActifsSur5(capteurs) >=
             SEUIL_REPERE_STATIONNEMENT_CAPTEURS;
@@ -105,13 +103,14 @@ void Stationnement::executer(bool estCoinEst,
             nombreLecturesConsecutives = 0;
         }
 
-        if (nombreLecturesConsecutives >=
-            NOMBRE_LECTURES_REPERE_STATIONNEMENT) {
-            break;
-        }
+        estRepereStationnementConfirme =
+            nombreLecturesConsecutives >=
+            NOMBRE_LECTURES_REPERE_STATIONNEMENT;
 
-        attendreMillisecondes(PAS_STATIONNEMENT_MS);
-        tempsEcouleMillisecondes += PAS_STATIONNEMENT_MS;
+        if (!estRepereStationnementConfirme) {
+            attendreMillisecondes(PAS_STATIONNEMENT_MS);
+            tempsEcouleMillisecondes += PAS_STATIONNEMENT_MS;
+        }
     }
 
     moteurs_.arreter();

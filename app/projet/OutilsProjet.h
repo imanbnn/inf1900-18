@@ -19,6 +19,11 @@
 
 class Del;
 
+void initialiserBaseTempsProjet();
+uint32_t obtenirTempsProjetMs();
+bool tempsEcouleDepuis(uint32_t departMillisecondes,
+                       uint16_t dureeMillisecondes);
+
 void attendreMillisecondes(uint16_t dureeMillisecondes);
 
 uint8_t compterBitsActifsSur5(uint8_t valeur);

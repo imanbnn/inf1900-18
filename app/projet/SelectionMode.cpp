@@ -7,6 +7,9 @@
  *       Kaouthar Nouadir
  *       Paul-Erwin Koffi
  *       Sandra Timma
+ *
+ * Description
+ *   Implémentation de la sélection du mode de fonctionnement
  */
 
 #include "SelectionMode.h"
@@ -22,16 +25,16 @@ namespace
     constexpr uint16_t DELAI_ENTRE_MODES_MS = 1000;
     constexpr uint16_t PAS_VERIFICATION_BOUTON_MS = 20;
 
-    bool boutonAppuyePendantDuree(Bouton& bouton, uint16_t dureeMs)
+    bool boutonAppuyePendantAttente(Bouton& bouton, uint16_t dureeMs)
     {
-        for (uint16_t tempsEcoule = 0;
-             tempsEcoule < dureeMs;
-             tempsEcoule += PAS_VERIFICATION_BOUTON_MS) {
+        const uint32_t debutAttenteMs = obtenirTempsProjetMs();
+
+        while (!tempsEcouleDepuis(debutAttenteMs, dureeMs)) {
             if (bouton.estAppuye()) {
                 return true;
             }
 
-            attendreMs(PAS_VERIFICATION_BOUTON_MS);
+            attendreMillisecondes(PAS_VERIFICATION_BOUTON_MS);
         }
 
         return false;
@@ -40,22 +43,21 @@ namespace
 
 ModeProjet selectionnerMode(Bouton& bouton, Del& del)
 {
-    attendreMs(DELAI_DEMARRAGE_MS);
+    attendreMillisecondes(DELAI_DEMARRAGE_MS);
 
     del.vert();
 
-    if (boutonAppuyePendantDuree(bouton, DELAI_ATTENTE_BOUTON_MS)) {
+    if (boutonAppuyePendantAttente(bouton, DELAI_ATTENTE_BOUTON_MS)) {
         del.eteindre();
         return ModeProjet::INSTRUCTION;
     }
 
     del.eteindre();
-
-    attendreMs(DELAI_ENTRE_MODES_MS);
+    attendreMillisecondes(DELAI_ENTRE_MODES_MS);
 
     del.rouge();
 
-    if (boutonAppuyePendantDuree(bouton, DELAI_ATTENTE_BOUTON_MS)) {
+    if (boutonAppuyePendantAttente(bouton, DELAI_ATTENTE_BOUTON_MS)) {
         del.eteindre();
         return ModeProjet::RAPPORT;
     }

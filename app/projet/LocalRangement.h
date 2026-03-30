@@ -12,15 +12,14 @@
  *       Sandra Timma
  *
  * Description
- *   Gestion d'un local de rangement
- *   Comptage des objets au sol avec le suiveur de ligne
+ *   Déclaration de la classe responsable du traitement du local de rangement
  */
 
 #include <stdint.h>
 
-class BrocheIo;
 class ControleMoteurs;
 class Deplacements;
+class Del;
 class SuiveurLigne;
 
 class LocalRangement
@@ -28,17 +27,17 @@ class LocalRangement
 public:
     LocalRangement(SuiveurLigne& suiveurLigne,
                    ControleMoteurs& moteurs,
-                   BrocheIo& delLibre,
+                   Del& del,
                    Deplacements& deplacements);
 
     uint8_t gerer(bool estEntreeAGauche);
 
 private:
-    uint8_t compterObjetsAuSol_();
+    uint8_t compterObjets_();
 
     SuiveurLigne& suiveurLigne_;
     ControleMoteurs& moteurs_;
-    BrocheIo& delLibre_;
+    Del& del_;
     Deplacements& deplacements_;
 };
 

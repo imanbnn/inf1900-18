@@ -26,6 +26,12 @@
  *       PB4 OC0B  PWM moteur droit
  *       PB2       DIR moteur gauche
  *       PB5       DIR moteur droit
+ *
+ *   Suiveur de ligne Maker Line
+ *       PC2 à PC6
+ *
+ *   Capteur de distance infrarouge
+ *       PA0, ADC0
  */
 
 #define F_CPU 8000000UL
@@ -43,6 +49,7 @@
 #include "ModeInstruction.h"
 #include "ModeRapport.h"
 #include "Moteur.h"
+#include "OutilsProjet.h"
 #include "SelectionMode.h"
 #include "Sonorite.h"
 #include "StockageProjet.h"
@@ -58,6 +65,7 @@ namespace
 int main()
 {
     UART0::initialiser2400bauds();
+    initialiserBaseTempsProjet();
 
     Del del;
     Bouton bouton;

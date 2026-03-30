@@ -12,14 +12,13 @@
  *       Sandra Timma
  *
  * Description
- *   Encapsulation du suivi de ligne et de la détection d'événements
- *   Intersection, entrée de local, timeout
+ *   Déclaration de la classe responsable du suivi de ligne pendant le parcours
  */
 
 #include <stdint.h>
 
-class BrocheIo;
 class ControleMoteurs;
+class Del;
 class SuiveurLigne;
 
 enum class CoteSuivi : uint8_t
@@ -38,8 +37,8 @@ enum class EvenementSuivi : uint8_t
 struct OptionsSuivi
 {
     bool estDetectionEntreeActive;
-    bool estComptageZonesActif;
     uint16_t timeoutMillisecondes;
+    bool estComptageZonesActif;
     uint8_t* compteurZones;
 };
 
@@ -48,33 +47,29 @@ class SuiviLigneParcours
 public:
     SuiviLigneParcours(SuiveurLigne& suiveurLigne,
                        ControleMoteurs& moteurs,
-                       BrocheIo& delLibre);
+                       Del& del);
 
-    EvenementSuivi suivreJusquaEvenement(
-        CoteSuivi cote,
-        const OptionsSuivi& options);
+    EvenementSuivi suivreJusquaEvenement(CoteSuivi coteSuivi,
+                                         const OptionsSuivi& options);
 
-    void ajusterMoteursSelonLigne(uint8_t capteurs,
-                                  CoteSuivi cote);
+    void ajusterSuiviSelonCapteurs(uint8_t capteurs,
+                                   CoteSuivi coteSuivi);
 
 private:
-    uint8_t obtenirMasqueSuivi_(CoteSuivi cote) const;
-    uint8_t obtenirMasqueMur_(CoteSuivi cote) const;
-
+    int16_t calculerPositionLigne_(uint8_t capteurs) const;
+    int8_t calculerCorrection_(int16_t positionLigne,
+                               CoteSuivi coteSuivi) const;
     bool estIntersection_(uint8_t capteurs) const;
     bool estPerteLigneEntree_(uint8_t capteurs,
-                              CoteSuivi cote) const;
-
-    int16_t calculerPositionCapteurs_(uint8_t capteurs,
-                                      CoteSuivi cote) const;
-
+                              CoteSuivi coteSuivi) const;
     void ajusterPourZoneSol_(uint8_t capteurs,
                              bool estComptageZonesActif,
-                             uint8_t* compteurZones);
+                             uint8_t* compteurZones,
+                             bool& etaitZoneSol);
 
     SuiveurLigne& suiveurLigne_;
     ControleMoteurs& moteurs_;
-    BrocheIo& delLibre_;
+    Del& del_;
 };
 
 #endif

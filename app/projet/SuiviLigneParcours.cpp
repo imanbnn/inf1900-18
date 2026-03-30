@@ -7,19 +7,25 @@
  *       Kaouthar Nouadir
  *       Paul-Erwin Koffi
  *       Sandra Timma
+ *
+ * Description
+ *   Implémentation de la classe responsable du suivi de ligne
+ *   pendant le parcours
  */
 
 #include "SuiviLigneParcours.h"
 
-#include "BrocheIo.h"
 #include "ConfigurationProjet.h"
 #include "ControleMoteurs.h"
+#include "Del.h"
 #include "OutilsProjet.h"
 #include "SuiveurLigne.h"
 
 namespace
 {
-    int16_t bornerValeur(int16_t valeur, int16_t minimum, int16_t maximum)
+    int16_t bornerInt16(int16_t valeur,
+                        int16_t minimum,
+                        int16_t maximum)
     {
         if (valeur < minimum) {
             return minimum;
@@ -35,53 +41,97 @@ namespace
 
 SuiviLigneParcours::SuiviLigneParcours(SuiveurLigne& suiveurLigne,
                                        ControleMoteurs& moteurs,
-                                       BrocheIo& delLibre)
+                                       Del& del)
     : suiveurLigne_(suiveurLigne),
       moteurs_(moteurs),
-      delLibre_(delLibre)
+      del_(del)
 {
 }
 
-uint8_t SuiviLigneParcours::obtenirMasqueSuivi_(CoteSuivi cote) const
+
+EvenementSuivi SuiviLigneParcours::suivreJusquaEvenement(
+    CoteSuivi coteSuivi,
+    const OptionsSuivi& options)
 {
-    return (cote == CoteSuivi::GAUCHE) ?
-        MASQUE_SUIVI_GAUCHE :
-        MASQUE_SUIVI_DROITE;
+    uint16_t tempsEcouleMs = 0;
+    uint16_t dureePerteLigneMs = 0;
+    bool etaitZoneSol = false;
+
+    while (true) {
+        const uint8_t capteurs = suiveurLigne_.lireCapteurs();
+
+        ajusterPourZoneSol_(capteurs,
+                            options.estComptageZonesActif,
+                            options.compteurZones,
+                            etaitZoneSol);
+
+        if (estIntersection_(capteurs)) {
+            del_.eteindre();
+            moteurs_.arreter();
+            return EvenementSuivi::INTERSECTION;
+        }
+
+        if (options.estDetectionEntreeActive) {
+            if (estPerteLigneEntree_(capteurs, coteSuivi)) {
+                dureePerteLigneMs += PERIODE_SUIVI_MS;
+
+                if (dureePerteLigneMs >= DUREE_PERTE_LIGNE_ENTREE_MS) {
+                    del_.eteindre();
+                    moteurs_.arreter();
+                    return EvenementSuivi::ENTREE_LOCAL;
+                }
+            }
+            else {
+                dureePerteLigneMs = 0;
+            }
+        }
+
+        ajusterSuiviSelonCapteurs(capteurs, coteSuivi);
+        attendreMillisecondes(PERIODE_SUIVI_MS);
+
+        tempsEcouleMs += PERIODE_SUIVI_MS;
+
+        if ((options.timeoutMillisecondes > 0) &&
+            (tempsEcouleMs >= options.timeoutMillisecondes)) {
+            del_.eteindre();
+            moteurs_.arreter();
+            return EvenementSuivi::TIMEOUT;
+        }
+    }
 }
 
-uint8_t SuiviLigneParcours::obtenirMasqueMur_(CoteSuivi cote) const
+
+void SuiviLigneParcours::ajusterSuiviSelonCapteurs(uint8_t capteurs,
+                                                   CoteSuivi coteSuivi)
 {
-    return (cote == CoteSuivi::GAUCHE) ?
-        MASQUE_MUR_GAUCHE :
-        MASQUE_MUR_DROITE;
+    const int16_t positionLigne = calculerPositionLigne_(capteurs);
+    const int8_t correction = calculerCorrection_(positionLigne, coteSuivi);
+
+    const int16_t vitesseGauche =
+        bornerInt16(VITESSE_SUIVI_LIGNE + correction,
+                    VITESSE_MIN,
+                    VITESSE_MAX);
+    const int16_t vitesseDroite =
+        bornerInt16(VITESSE_SUIVI_LIGNE - correction,
+                    VITESSE_MIN,
+                    VITESSE_MAX);
+
+    const int8_t vitesseGaucheSignee = (int8_t)(-vitesseGauche);
+    const int8_t vitesseDroiteSignee = (int8_t)(-vitesseDroite);
+
+    moteurs_.ajusterVitesses(vitesseGaucheSignee,
+                             vitesseDroiteSignee);
 }
 
-bool SuiviLigneParcours::estIntersection_(uint8_t capteurs) const
-{
-    return compterBitsActifsSur5(capteurs) >=
-           SEUIL_INTERSECTION_CAPTEURS;
-}
 
-bool SuiviLigneParcours::estPerteLigneEntree_(uint8_t capteurs,
-                                              CoteSuivi cote) const
+int16_t SuiviLigneParcours::calculerPositionLigne_(uint8_t capteurs) const
 {
-    const uint8_t masqueSuivi = obtenirMasqueSuivi_(cote);
-    return (capteurs & masqueSuivi) == 0;
-}
-
-int16_t SuiviLigneParcours::calculerPositionCapteurs_(uint8_t capteurs,
-                                                      CoteSuivi cote) const
-{
-    const uint8_t masqueSuivi = obtenirMasqueSuivi_(cote);
     uint16_t sommePositions = 0;
-    uint16_t nombreCapteursActifs = 0;
+    uint8_t nombreCapteursActifs = 0;
 
-    for (uint8_t i = 0; i < NOMBRE_CAPTEURS_SUIVEUR_LIGNE; i++) {
-        const uint8_t bitCapteur = (uint8_t)(1 << i);
-
-        if ((capteurs & masqueSuivi & bitCapteur) != 0) {
-            sommePositions +=
-                (uint16_t)i * FACTEUR_POSITION_CAPTEUR;
+    for (uint8_t i = 0; i < NOMBRE_CAPTEURS; i++) {
+        if (capteurs & (1 << i)) {
+            sommePositions += (uint16_t)i * FACTEUR_POSITION_CAPTEUR;
             nombreCapteursActifs++;
         }
     }
@@ -93,131 +143,77 @@ int16_t SuiviLigneParcours::calculerPositionCapteurs_(uint8_t capteurs,
     return (int16_t)(sommePositions / nombreCapteursActifs);
 }
 
-void SuiviLigneParcours::ajusterMoteursSelonLigne(uint8_t capteurs,
-                                                  CoteSuivi cote)
+
+int8_t SuiviLigneParcours::calculerCorrection_(int16_t positionLigne,
+                                               CoteSuivi coteSuivi) const
 {
-    const int16_t position = calculerPositionCapteurs_(capteurs, cote);
+    if (positionLigne == POSITION_NON_DETECTEE) {
+        if (coteSuivi == CoteSuivi::GAUCHE) {
+            return -AJUSTEMENT_PERTE_LIGNE;
+        }
+
+        return AJUSTEMENT_PERTE_LIGNE;
+    }
+
     const int16_t positionVoulue =
-        (cote == CoteSuivi::GAUCHE) ?
-        POSITION_VOULUE_GAUCHE :
-        POSITION_VOULUE_DROITE;
+        (coteSuivi == CoteSuivi::GAUCHE) ? POSITION_VOULUE_GAUCHE
+                                         : POSITION_VOULUE_DROITE;
+    const int16_t erreur = positionVoulue - positionLigne;
+    int16_t correction = erreur / KP_SUIVI;
 
-    int16_t vitesseGauche = VITESSE_SUIVI_LIGNE;
-    int16_t vitesseDroite = VITESSE_SUIVI_LIGNE;
+    correction = bornerInt16(correction,
+                             -AJUSTEMENT_PERTE_LIGNE,
+                             AJUSTEMENT_PERTE_LIGNE);
 
-    if (position == POSITION_NON_DETECTEE) {
-        if (cote == CoteSuivi::GAUCHE) {
-            vitesseGauche = VITESSE_SUIVI_LIGNE -
-                            AJUSTEMENT_PERTE_LIGNE;
-            vitesseDroite = VITESSE_SUIVI_LIGNE +
-                            AJUSTEMENT_PERTE_LIGNE;
-        }
-        else {
-            vitesseGauche = VITESSE_SUIVI_LIGNE +
-                            AJUSTEMENT_PERTE_LIGNE;
-            vitesseDroite = VITESSE_SUIVI_LIGNE -
-                            AJUSTEMENT_PERTE_LIGNE;
-        }
-    }
-    else {
-        const int16_t erreur = position - positionVoulue;
-        const int16_t correction =
-            (KP_SUIVI * erreur) / FACTEUR_POSITION_CAPTEUR;
-
-        vitesseGauche = VITESSE_SUIVI_LIGNE + correction;
-        vitesseDroite = VITESSE_SUIVI_LIGNE - correction;
-    }
-
-    vitesseGauche = bornerValeur(vitesseGauche,
-                                 VITESSE_MIN,
-                                 VITESSE_MAX);
-    vitesseDroite = bornerValeur(vitesseDroite,
-                                 VITESSE_MIN,
-                                 VITESSE_MAX);
-
-    moteurs_.ajusterVitesses((int8_t)(-vitesseGauche),
-                             (int8_t)(-vitesseDroite));
+    return (int8_t)correction;
 }
+
+
+bool SuiviLigneParcours::estIntersection_(uint8_t capteurs) const
+{
+    return compterBitsActifsSur5(capteurs) >= SEUIL_INTERSECTION_CAPTEURS;
+}
+
+
+bool SuiviLigneParcours::estPerteLigneEntree_(uint8_t capteurs,
+                                              CoteSuivi coteSuivi) const
+{
+    const uint8_t nombreBitsActifs = compterBitsActifsSur5(capteurs);
+    const uint8_t masqueSuivi =
+        (coteSuivi == CoteSuivi::GAUCHE) ? MASQUE_SUIVI_GAUCHE
+                                         : MASQUE_SUIVI_DROITE;
+
+    if (capteurs == 0) {
+        return true;
+    }
+
+    return ((capteurs & masqueSuivi) == 0) && (nombreBitsActifs <= 1);
+}
+
 
 void SuiviLigneParcours::ajusterPourZoneSol_(uint8_t capteurs,
                                              bool estComptageZonesActif,
-                                             uint8_t* compteurZones)
+                                             uint8_t* compteurZones,
+                                             bool& etaitZoneSol)
 {
+    const uint8_t nombreCapteursActifs = compterBitsActifsSur5(capteurs);
     const bool estZoneSol =
-        compterBitsActifsSur5(capteurs) >= SEUIL_OBJET_CAPTEURS;
+        !estIntersection_(capteurs) &&
+        (nombreCapteursActifs >= SEUIL_OBJET_CAPTEURS);
 
     if (estZoneSol) {
-        delLibre_.mettreAUn();
+        del_.rouge();
     }
     else {
-        delLibre_.mettreAZero();
+        del_.eteindre();
     }
 
-    (void)estComptageZonesActif;
-    (void)compteurZones;
-}
-
-EvenementSuivi SuiviLigneParcours::suivreJusquaEvenement(
-    CoteSuivi cote,
-    const OptionsSuivi& options)
-{
-    uint16_t dureePerteLigneMs = 0;
-    uint16_t tempsEcouleMillisecondes = 0;
-    bool etaitZoneSol = false;
-
-    while (tempsEcouleMillisecondes < options.timeoutMillisecondes) {
-        const uint8_t capteurs = suiveurLigne_.lireCapteurs();
-        const uint8_t masqueMur = obtenirMasqueMur_(cote);
-
-        if ((capteurs & masqueMur) == masqueMur) {
-            delLibre_.mettreAZero();
-            return EvenementSuivi::INTERSECTION;
+    if (estComptageZonesActif && (compteurZones != nullptr)) {
+        if (estZoneSol && !etaitZoneSol &&
+            (*compteurZones < NOMBRE_ZONES_SOL_MAX)) {
+            (*compteurZones)++;
         }
-
-        ajusterPourZoneSol_(capteurs,
-                            options.estComptageZonesActif,
-                            options.compteurZones);
-
-        if (options.estComptageZonesActif &&
-            (options.compteurZones != nullptr)) {
-            const bool estZoneSol =
-                compterBitsActifsSur5(capteurs) >=
-                SEUIL_OBJET_CAPTEURS;
-
-            if (estZoneSol && !etaitZoneSol) {
-                if (*(options.compteurZones) < NOMBRE_ZONES_SOL_MAX) {
-                    (*(options.compteurZones))++;
-                }
-            }
-
-            etaitZoneSol = estZoneSol;
-        }
-
-        if (options.estDetectionEntreeActive) {
-            if (estPerteLigneEntree_(capteurs, cote)) {
-                dureePerteLigneMs += PERIODE_SUIVI_MS;
-            }
-            else {
-                dureePerteLigneMs = 0;
-            }
-
-            if (dureePerteLigneMs >= DUREE_PERTE_LIGNE_ENTREE_MS) {
-                delLibre_.mettreAZero();
-                return EvenementSuivi::ENTREE_LOCAL;
-            }
-        }
-
-        if (estIntersection_(capteurs)) {
-            delLibre_.mettreAZero();
-            return EvenementSuivi::INTERSECTION;
-        }
-
-        ajusterMoteursSelonLigne(capteurs, cote);
-        attendreMillisecondes(PERIODE_SUIVI_MS);
-
-        tempsEcouleMillisecondes += PERIODE_SUIVI_MS;
     }
 
-    delLibre_.mettreAZero();
-    return EvenementSuivi::TIMEOUT;
+    etaitZoneSol = estZoneSol;
 }

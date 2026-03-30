@@ -7,27 +7,31 @@
  *       Kaouthar Nouadir
  *       Paul-Erwin Koffi
  *       Sandra Timma
+ *
+ * Description
+ *   Implémentation de la classe responsable du traitement du local de rangement
  */
 
 #include "LocalRangement.h"
 
-#include "BrocheIo.h"
 #include "ConfigurationProjet.h"
 #include "ControleMoteurs.h"
 #include "Deplacements.h"
+#include "Del.h"
 #include "OutilsProjet.h"
 #include "SuiveurLigne.h"
 
 LocalRangement::LocalRangement(SuiveurLigne& suiveurLigne,
                                ControleMoteurs& moteurs,
-                               BrocheIo& delLibre,
+                               Del& del,
                                Deplacements& deplacements)
     : suiveurLigne_(suiveurLigne),
       moteurs_(moteurs),
-      delLibre_(delLibre),
+      del_(del),
       deplacements_(deplacements)
 {
 }
+
 
 uint8_t LocalRangement::gerer(bool estEntreeAGauche)
 {
@@ -38,9 +42,7 @@ uint8_t LocalRangement::gerer(bool estEntreeAGauche)
         deplacements_.tournerDroite90();
     }
 
-    const uint8_t nombreObjetsTrouves = compterObjetsAuSol_();
-
-    delLibre_.mettreAZero();
+    const uint8_t nombreObjets = compterObjets_();
 
     deplacements_.reculerPendant(VITESSE_SORTIE_LOCAL,
                                  DUREE_RECUL_LOCAL_RANGEMENT_MS);
@@ -52,47 +54,45 @@ uint8_t LocalRangement::gerer(bool estEntreeAGauche)
         deplacements_.tournerGauche90();
     }
 
-    return nombreObjetsTrouves;
+    del_.eteindre();
+
+    return nombreObjets;
 }
 
-uint8_t LocalRangement::compterObjetsAuSol_()
+
+uint8_t LocalRangement::compterObjets_()
 {
-    uint8_t nombreObjetsTrouves = 0;
-    bool estSurObjetPrecedemment = false;
+    uint8_t nombreObjets = 0;
+    bool etaitSurObjet = false;
 
     moteurs_.avancer(VITESSE_ENTREE_LOCAL);
 
-    uint16_t tempsEcouleMillisecondes = 0;
+    const uint32_t debutBalayageMs = obtenirTempsProjetMs();
 
-    while (tempsEcouleMillisecondes <
-           DUREE_AVANCE_LOCAL_RANGEMENT_MS) {
+    while (!tempsEcouleDepuis(debutBalayageMs,
+                              DUREE_AVANCE_LOCAL_RANGEMENT_MS)) {
         const uint8_t capteurs = suiveurLigne_.lireCapteurs();
-
         const bool estSurObjet =
-            compterBitsActifsSur5(capteurs) >=
-            SEUIL_OBJET_CAPTEURS;
+            compterBitsActifsSur5(capteurs) >= SEUIL_OBJET_CAPTEURS;
 
         if (estSurObjet) {
-            delLibre_.mettreAUn();
-        }
-        else {
-            delLibre_.mettreAZero();
-        }
+            del_.rouge();
 
-        if (estSurObjet && !estSurObjetPrecedemment) {
-            if (nombreObjetsTrouves <
-                NOMBRE_OBJETS_MAX_LOCAL_RANGEMENT) {
-                nombreObjetsTrouves++;
+            if (!etaitSurObjet &&
+                (nombreObjets < NOMBRE_OBJETS_MAX_LOCAL_RANGEMENT)) {
+                nombreObjets++;
             }
         }
+        else {
+            del_.eteindre();
+        }
 
-        estSurObjetPrecedemment = estSurObjet;
-
+        etaitSurObjet = estSurObjet;
         attendreMillisecondes(PERIODE_SUIVI_MS);
-        tempsEcouleMillisecondes += PERIODE_SUIVI_MS;
     }
 
     moteurs_.arreter();
+    del_.eteindre();
 
-    return nombreObjetsTrouves;
+    return nombreObjets;
 }

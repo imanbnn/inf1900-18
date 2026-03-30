@@ -7,9 +7,10 @@
  *       Kaouthar Nouadir
  *       Paul-Erwin Koffi
  *       Sandra Timma
+ *
+ * Description
+ *   Implémentation du mode instruction
  */
-
-#define F_CPU 8000000UL
 
 #include "ModeInstruction.h"
 
@@ -31,7 +32,6 @@ namespace
 
     constexpr uint16_t TAILLE_MINIMALE_PROGRAMME = 2;
     constexpr uint16_t TAILLE_INSTRUCTION_OCTETS = 2;
-    constexpr uint16_t TAILLE_PARAMETRES_PROGRAMME = 14;
 
     constexpr uint16_t DECALAGE_INSTRUCTION_DEBUT = 0;
     constexpr uint16_t DECALAGE_INSTRUCTION_SENS = 2;
@@ -42,11 +42,15 @@ namespace
     constexpr uint8_t DECALAGE_OCTET_FAIBLE = 1;
     constexpr uint8_t DECALAGE_OCTET_FORT = 8;
 
-    constexpr uint8_t VALEUR_SENS_HORAIRE = 0;
-    constexpr uint8_t VALEUR_SENS_ANTI_HORAIRE = 1;
-
     constexpr uint16_t DUREE_CONFIRMATION_STATIONNEMENT_MS = 500;
     constexpr uint16_t DUREE_CLIGNOTEMENT_MODE_MS = 2000;
+
+    void mettreRobotEnEtatSecuritaire(Del& del, Sonorite& sonorite)
+    {
+        sonorite.arreter();
+        del.eteindre();
+    }
+
 
     void confirmerStationnement(Del& del, uint8_t numeroStationnement)
     {
@@ -56,14 +60,14 @@ namespace
         }
     }
 
+
     bool recevoirProgrammeEtSauvegarder(Memoire24CXXX& memoire,
-                                        uint16_t adresseDepart,
-                                        uint16_t& tailleProgramme)
+                                        uint16_t adresseDepart)
     {
         const uint8_t octetFaible = UART0::recevoirOctet();
         const uint8_t octetFort = UART0::recevoirOctet();
 
-        tailleProgramme =
+        const uint16_t tailleProgramme =
             ((uint16_t)octetFort << DECALAGE_OCTET_FORT) |
             (uint16_t)octetFaible;
 
@@ -84,7 +88,8 @@ namespace
         return true;
     }
 
-    bool lireInstructionEtOperande(Memoire24CXXX& memoire,
+
+    void lireInstructionEtOperande(Memoire24CXXX& memoire,
                                    uint16_t adresseInstruction,
                                    uint8_t& instruction,
                                    uint8_t& operande)
@@ -92,8 +97,8 @@ namespace
         memoire.lecture(adresseInstruction, &instruction);
         memoire.lecture(adresseInstruction + DECALAGE_OCTET_FAIBLE,
                         &operande);
-        return true;
     }
+
 
     bool extraireParametres(Memoire24CXXX& memoire,
                             uint16_t adresseDepart,
@@ -101,8 +106,6 @@ namespace
     {
         const uint16_t adressePremiereInstruction =
             adresseDepart + TAILLE_INSTRUCTION_OCTETS;
-        const uint16_t adresseFinProgramme =
-            adressePremiereInstruction + TAILLE_PARAMETRES_PROGRAMME;
 
         uint8_t instruction = 0;
         uint8_t operande = 0;
@@ -174,13 +177,9 @@ namespace
                                   instruction,
                                   operande);
 
-        if (instruction != JeuInstructions::fin) {
-            return false;
-        }
-
-        return (adressePremiereInstruction + TAILLE_PARAMETRES_PROGRAMME) ==
-               adresseFinProgramme;
+        return instruction == JeuInstructions::fin;
     }
+
 
     void jouerNote(Sonorite& sonorite, uint8_t noteMidi)
     {
@@ -188,6 +187,7 @@ namespace
         attendreMillisecondes(DUREE_NOTE_ALERTE_MS);
         sonorite.arreter();
     }
+
 
     void confirmerReception(Del& del,
                             Sonorite& sonorite,
@@ -230,23 +230,22 @@ void executerModeInstruction(Memoire24CXXX& memoire,
     ParametresProjet parametres =
     {
         SensParcours::HORAIRE,
-        {60, 62, 64},
+        {NOTE_PAR_DEFAUT, NOTE_PAR_DEFAUT, NOTE_PAR_DEFAUT},
         NUMERO_STATIONNEMENT_PAR_DEFAUT
     };
 
-    uint16_t tailleProgramme = 0;
-
     if (!recevoirProgrammeEtSauvegarder(memoire,
-                                        ADRESSE_DEPART_PROGRAMME,
-                                        tailleProgramme)) {
-        DEBUG_PRINT("Mode instruction  reception echouee\n");
+                                        ADRESSE_DEPART_PROGRAMME)) {
+        DEBUG_PRINT("Mode instruction reception echouee\n");
+        mettreRobotEnEtatSecuritaire(del, sonorite);
         return;
     }
 
     if (!extraireParametres(memoire,
                             ADRESSE_DEPART_PROGRAMME,
                             parametres)) {
-        DEBUG_PRINT("Mode instruction  extraction parametres echouee\n");
+        DEBUG_PRINT("Mode instruction extraction parametres echouee\n");
+        mettreRobotEnEtatSecuritaire(del, sonorite);
         return;
     }
 
