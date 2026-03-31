@@ -24,13 +24,17 @@ namespace
 
     bool boutonAppuyePendantDuree(Bouton& bouton, uint16_t dureeMs)
     {
-        for (uint16_t tempsEcoule = 0;
-             tempsEcoule < dureeMs;
-             tempsEcoule += PAS_VERIFICATION_BOUTON_MS) {
-            if (bouton.estAppuye()) {
+        const uint32_t debutAttenteMs = obtenirTempsProjetMs();
+        bool etaitAppuye = bouton.estAppuye();
+
+        while (!tempsEcouleDepuis(debutAttenteMs, dureeMs)) {
+            const bool estAppuye = bouton.estAppuye();
+
+            if (!etaitAppuye && estAppuye) {
                 return true;
             }
 
+            etaitAppuye = estAppuye;
             attendreMillisecondes(PAS_VERIFICATION_BOUTON_MS);
         }
 
