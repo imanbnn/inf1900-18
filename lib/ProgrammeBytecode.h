@@ -37,6 +37,12 @@ public:
                                    uint8_t& instruction,
                                    uint8_t& operande) const;
 
+    bool ecrireProgramme(const uint8_t* programme,
+                         uint16_t longueurTotale);
+
+    bool verifierProgramme(const uint8_t* programme,
+                           uint16_t longueurTotale) const;
+
 private:
     static constexpr uint16_t adresseDepartMemoire_ = 0x0000;
     static constexpr uint16_t tailleEntete_ = 2;

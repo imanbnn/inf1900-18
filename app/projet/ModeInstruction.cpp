@@ -22,25 +22,22 @@
 #include "JeuInstructions.h"
 #include "Memoire_24.h"
 #include "OutilsProjet.h"
+#include "ProgrammeBytecode.h"
 #include "Sonorite.h"
 #include "StockageProjet.h"
 #include "UART0.h"
 
 namespace
 {
-    constexpr uint16_t ADRESSE_DEPART_PROGRAMME = 0x0000;
-
-    constexpr uint16_t TAILLE_MINIMALE_PROGRAMME = 2;
+    constexpr uint16_t TAILLE_ENTETE_PROGRAMME = 2;
     constexpr uint16_t TAILLE_INSTRUCTION_OCTETS = 2;
+    constexpr uint16_t TAILLE_PROGRAMME_ATTENDUE = 16;
 
-    constexpr uint16_t DECALAGE_INSTRUCTION_DEBUT = 0;
-    constexpr uint16_t DECALAGE_INSTRUCTION_SENS = 2;
-    constexpr uint16_t DECALAGE_PREMIERE_NOTE = 4;
-    constexpr uint16_t DECALAGE_INSTRUCTION_STATIONNEMENT = 10;
-    constexpr uint16_t DECALAGE_INSTRUCTION_FIN = 12;
-
-    constexpr uint8_t DECALAGE_OCTET_FAIBLE = 1;
-    constexpr uint8_t DECALAGE_OCTET_FORT = 8;
+    constexpr uint16_t INDEX_INSTRUCTION_DEBUT = 2;
+    constexpr uint16_t INDEX_INSTRUCTION_SENS = 4;
+    constexpr uint16_t INDEX_PREMIERE_NOTE = 6;
+    constexpr uint16_t INDEX_INSTRUCTION_STATIONNEMENT = 12;
+    constexpr uint16_t INDEX_INSTRUCTION_FIN = 14;
 
     constexpr uint16_t DUREE_CONFIRMATION_STATIONNEMENT_MS = 500;
     constexpr uint16_t DUREE_CLIGNOTEMENT_MODE_MS = 2000;
@@ -49,6 +46,27 @@ namespace
     {
         sonorite.arreter();
         del.eteindre();
+    }
+
+
+    bool parametresEgaux(const ParametresProjet& premier,
+                         const ParametresProjet& second)
+    {
+        if (premier.sensParcours != second.sensParcours) {
+            return false;
+        }
+
+        if (premier.numeroStationnement != second.numeroStationnement) {
+            return false;
+        }
+
+        for (uint8_t i = 0; i < NOMBRE_NOTES_MIDI; i++) {
+            if (premier.notesMidi[i] != second.notesMidi[i]) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
 
@@ -61,75 +79,52 @@ namespace
     }
 
 
-    bool recevoirProgrammeEtSauvegarder(Memoire24CXXX& memoire,
-                                        uint16_t adresseDepart)
+    bool recevoirProgrammeEnRam(uint8_t programme[TAILLE_PROGRAMME_ATTENDUE])
     {
-        const uint8_t octetFaible = UART0::recevoirOctet();
-        const uint8_t octetFort = UART0::recevoirOctet();
+        const uint8_t premierOctetTaille = UART0::recevoirOctet();
+        const uint8_t secondOctetTaille = UART0::recevoirOctet();
 
-        const uint16_t tailleProgramme =
-            ((uint16_t)octetFort << DECALAGE_OCTET_FORT) |
-            (uint16_t)octetFaible;
+        const uint16_t tailleFortPuisFaible =
+            (uint16_t)(((uint16_t)premierOctetTaille << 8) |
+                       secondOctetTaille);
+        const uint16_t tailleFaiblePuisFort =
+            (uint16_t)(((uint16_t)secondOctetTaille << 8) |
+                       premierOctetTaille);
 
-        if (tailleProgramme < TAILLE_MINIMALE_PROGRAMME) {
+        if (tailleFortPuisFaible == TAILLE_PROGRAMME_ATTENDUE) {
+            programme[0] = premierOctetTaille;
+            programme[1] = secondOctetTaille;
+        }
+        else if (tailleFaiblePuisFort == TAILLE_PROGRAMME_ATTENDUE) {
+            programme[0] = 0;
+            programme[1] = (uint8_t)TAILLE_PROGRAMME_ATTENDUE;
+        }
+        else {
             return false;
         }
 
-        memoire.ecriture(adresseDepart, octetFaible);
-        memoire.ecriture(adresseDepart + DECALAGE_OCTET_FAIBLE, octetFort);
-
-        for (uint16_t i = TAILLE_MINIMALE_PROGRAMME;
-             i < tailleProgramme;
+        for (uint16_t i = TAILLE_ENTETE_PROGRAMME;
+             i < TAILLE_PROGRAMME_ATTENDUE;
              i++) {
-            const uint8_t octet = UART0::recevoirOctet();
-            memoire.ecriture(adresseDepart + i, octet);
+            programme[i] = UART0::recevoirOctet();
         }
 
         return true;
     }
 
 
-    void lireInstructionEtOperande(Memoire24CXXX& memoire,
-                                   uint16_t adresseInstruction,
-                                   uint8_t& instruction,
-                                   uint8_t& operande)
+    bool extraireParametresDepuisRam(
+        const uint8_t programme[TAILLE_PROGRAMME_ATTENDUE],
+        ParametresProjet& parametres)
     {
-        memoire.lecture(adresseInstruction, &instruction);
-        memoire.lecture(adresseInstruction + DECALAGE_OCTET_FAIBLE,
-                        &operande);
-    }
-
-
-    bool extraireParametres(Memoire24CXXX& memoire,
-                            uint16_t adresseDepart,
-                            ParametresProjet& parametres)
-    {
-        const uint16_t adressePremiereInstruction =
-            adresseDepart + TAILLE_INSTRUCTION_OCTETS;
-
-        uint8_t instruction = 0;
-        uint8_t operande = 0;
-
-        lireInstructionEtOperande(memoire,
-                                  adressePremiereInstruction +
-                                      DECALAGE_INSTRUCTION_DEBUT,
-                                  instruction,
-                                  operande);
-
-        if (instruction != JeuInstructions::dbt) {
+        if (programme[INDEX_INSTRUCTION_DEBUT] != JeuInstructions::dbt) {
             return false;
         }
 
-        lireInstructionEtOperande(memoire,
-                                  adressePremiereInstruction +
-                                      DECALAGE_INSTRUCTION_SENS,
-                                  instruction,
-                                  operande);
-
-        if (instruction == JeuInstructions::trd) {
+        if (programme[INDEX_INSTRUCTION_SENS] == JeuInstructions::trd) {
             parametres.sensParcours = SensParcours::HORAIRE;
         }
-        else if (instruction == JeuInstructions::trg) {
+        else if (programme[INDEX_INSTRUCTION_SENS] == JeuInstructions::trg) {
             parametres.sensParcours = SensParcours::ANTI_HORAIRE;
         }
         else {
@@ -137,47 +132,31 @@ namespace
         }
 
         for (uint8_t i = 0; i < NOMBRE_NOTES_MIDI; i++) {
-            const uint16_t adresseInstructionNote =
-                adressePremiereInstruction +
-                DECALAGE_PREMIERE_NOTE +
+            const uint16_t indexInstruction =
+                INDEX_PREMIERE_NOTE +
                 (uint16_t)i * TAILLE_INSTRUCTION_OCTETS;
 
-            lireInstructionEtOperande(memoire,
-                                      adresseInstructionNote,
-                                      instruction,
-                                      operande);
-
-            if (instruction != JeuInstructions::sgo) {
+            if (programme[indexInstruction] != JeuInstructions::sgo) {
                 return false;
             }
 
-            parametres.notesMidi[i] = operande;
+            parametres.notesMidi[i] = programme[indexInstruction + 1];
         }
 
-        lireInstructionEtOperande(memoire,
-                                  adressePremiereInstruction +
-                                      DECALAGE_INSTRUCTION_STATIONNEMENT,
-                                  instruction,
-                                  operande);
-
-        if (instruction != JeuInstructions::att) {
+        if (programme[INDEX_INSTRUCTION_STATIONNEMENT] !=
+            JeuInstructions::att) {
             return false;
         }
 
-        if ((operande < NUMERO_STATIONNEMENT_MIN) ||
-            (operande > NUMERO_STATIONNEMENT_MAX)) {
-            operande = NUMERO_STATIONNEMENT_PAR_DEFAUT;
+        parametres.numeroStationnement =
+            programme[INDEX_INSTRUCTION_STATIONNEMENT + 1];
+
+        if ((parametres.numeroStationnement < NUMERO_STATIONNEMENT_MIN) ||
+            (parametres.numeroStationnement > NUMERO_STATIONNEMENT_MAX)) {
+            parametres.numeroStationnement = NUMERO_STATIONNEMENT_PAR_DEFAUT;
         }
 
-        parametres.numeroStationnement = operande;
-
-        lireInstructionEtOperande(memoire,
-                                  adressePremiereInstruction +
-                                      DECALAGE_INSTRUCTION_FIN,
-                                  instruction,
-                                  operande);
-
-        return instruction == JeuInstructions::fin;
+        return programme[INDEX_INSTRUCTION_FIN] == JeuInstructions::fin;
     }
 
 
@@ -234,24 +213,49 @@ void executerModeInstruction(Memoire24CXXX& memoire,
         NUMERO_STATIONNEMENT_PAR_DEFAUT
     };
 
-    if (!recevoirProgrammeEtSauvegarder(memoire,
-                                        ADRESSE_DEPART_PROGRAMME)) {
-        DEBUG_PRINT("Mode instruction reception echouee\n");
+    uint8_t programmeRecu[TAILLE_PROGRAMME_ATTENDUE] = {0};
+
+    if (!recevoirProgrammeEnRam(programmeRecu)) {
+        DEBUG_PRINT("Mode instruction reception UART echouee\n");
         mettreRobotEnEtatSecuritaire(del, sonorite);
         return;
     }
 
-    if (!extraireParametres(memoire,
-                            ADRESSE_DEPART_PROGRAMME,
-                            parametres)) {
+    if (!extraireParametresDepuisRam(programmeRecu, parametres)) {
         DEBUG_PRINT("Mode instruction extraction parametres echouee\n");
         mettreRobotEnEtatSecuritaire(del, sonorite);
         return;
     }
 
-    stockage.ecrireParametres(parametres);
-    stockage.effacerResultats();
+    ProgrammeBytecode programmeBytecode(memoire);
 
+    if (!programmeBytecode.ecrireProgramme(programmeRecu,
+                                           TAILLE_PROGRAMME_ATTENDUE)) {
+        DEBUG_PRINT("Mode instruction ecriture programme echouee\n");
+        mettreRobotEnEtatSecuritaire(del, sonorite);
+        return;
+    }
+
+    programmeBytecode.initialiser();
+
+    if (programmeBytecode.obtenirLongueurTotale() != TAILLE_PROGRAMME_ATTENDUE) {
+        DEBUG_PRINT("Mode instruction relecture programme echouee\n");
+        mettreRobotEnEtatSecuritaire(del, sonorite);
+        return;
+    }
+
+    stockage.ecrireParametres(parametres);
+
+    ParametresProjet verification = {};
+
+    if (!stockage.lireParametres(verification) ||
+        !parametresEgaux(parametres, verification)) {
+        DEBUG_PRINT("Mode instruction verification stockage echouee\n");
+        mettreRobotEnEtatSecuritaire(del, sonorite);
+        return;
+    }
+
+    stockage.effacerResultats();
     confirmerReception(del, sonorite, parametres);
 
     while (true) {

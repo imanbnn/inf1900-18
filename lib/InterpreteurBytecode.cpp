@@ -63,6 +63,8 @@ InterpreteurBytecode::InterpreteurBytecode(ProgrammeBytecode& programme,
 
 void InterpreteurBytecode::executer()
 {
+    programme_.initialiser();
+
     const uint16_t longueurTotale = programme_.obtenirLongueurTotale();
 
     if (longueurTotale < TAILLE_ENTETE_PROGRAMME_OCTETS) {

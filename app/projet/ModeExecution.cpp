@@ -36,16 +36,46 @@ namespace
     constexpr uint8_t INDICE_LOCAL_C = 2;
     constexpr uint8_t INDICE_LOCAL_D = 3;
 
-    void avancerJusquaDetectionLigne(ControleMoteurs& moteurs,
-                                     SuiveurLigne& suiveurLigne)
+    void initialiserParametresParDefaut(ParametresProjet& parametres)
     {
-        moteurs.avancer(VITESSE_SUIVI_LIGNE);
+        parametres.sensParcours = SensParcours::HORAIRE;
+        parametres.numeroStationnement = NUMERO_STATIONNEMENT_PAR_DEFAUT;
+
+        for (uint8_t i = 0; i < NOMBRE_NOTES_MIDI; i++) {
+            parametres.notesMidi[i] = NOTE_PAR_DEFAUT;
+        }
+    }
+
+
+    bool sortirDuStationnementEtRejoindreLigne(Deplacements& deplacements,
+                                               ControleMoteurs& moteurs,
+                                               SuiveurLigne& suiveurLigne)
+    {
+        deplacements.reculerPendant(VITESSE_SORTIE_STATIONNEMENT,
+                                    DUREE_RECUL_SORTIE_STATIONNEMENT_MS);
+
+        deplacements.demiTour();
+
+        moteurs.avancer(VITESSE_SORTIE_STATIONNEMENT);
+
+        uint16_t tempsEcouleMs = 0;
 
         while (!suiveurLigne.estSurObjet()) {
             attendreMillisecondes(PERIODE_SUIVI_MS);
+            tempsEcouleMs += PERIODE_SUIVI_MS;
+
+            if (tempsEcouleMs >= TIMEOUT_RECHERCHE_LIGNE_SORTIE_MS) {
+                moteurs.arreter();
+                return false;
+            }
         }
 
         moteurs.arreter();
+
+        deplacements.avancerPendant(VITESSE_SORTIE_STATIONNEMENT,
+                                    DUREE_AVANCE_ALIGNEMENT_SORTIE_MS);
+
+        return true;
     }
 
 
@@ -131,10 +161,8 @@ void executerModeExecution(Del& del,
                            StockageProjet& stockage)
 {
     ParametresProjet parametres = {};
-
-    if (!stockage.lireParametres(parametres)) {
-        return;
-    }
+    initialiserParametresParDefaut(parametres);
+    (void)stockage.lireParametres(parametres);
 
     ResultatsProjet resultats = {};
 
@@ -179,8 +207,12 @@ void executerModeExecution(Del& del,
         nullptr
     };
 
-    deplacements.demiTour();
-    avancerJusquaDetectionLigne(moteurs, suiveurLigne);
+    if (!sortirDuStationnementEtRejoindreLigne(deplacements,
+                                               moteurs,
+                                               suiveurLigne)) {
+        return;
+    }
+
     effectuerVirageCoin(deplacements, estHoraire);
 
     if (!suivreSegment(suiviParcours,
