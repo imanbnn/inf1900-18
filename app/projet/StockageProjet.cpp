@@ -9,7 +9,8 @@
  *       Sandra Timma
  */
 
-#include "StockageProjet.h"
+ #include "ConfigurationProjet.h"
+ #include "StockageProjet.h"
 
 namespace
 {

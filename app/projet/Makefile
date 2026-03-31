@@ -9,14 +9,14 @@
 #####  Psychogenic Inc (www.psychogenic.com) #####
 ##################################################
 
-include ../../../Makefile.commun.mk
+include ../../Makefile.commun.mk
 
 PROJECTNAME = test_capteurs
 TRG = $(PROJECTNAME).elf
 HEXROMTRG = $(PROJECTNAME).hex
 MAPTRG = $(PROJECTNAME).map
 
-LIBDIR = ../../../lib
+LIBDIR = ../../lib
 LIBNAME = inf1900
 LIBFILE = $(LIBDIR)/lib$(LIBNAME).a
 
