@@ -48,8 +48,8 @@ constexpr int16_t POSITION_NON_DETECTEE = -1;
 constexpr int16_t POSITION_VOULUE_GAUCHE = 50;
 constexpr int16_t POSITION_VOULUE_DROITE = 350;
 
-constexpr int16_t AJUSTEMENT_PERTE_LIGNE = 12;
-constexpr uint8_t KP_SUIVI = 20;
+constexpr int16_t AJUSTEMENT_PERTE_LIGNE = 15;
+constexpr uint8_t KP_SUIVI = 18;
 constexpr uint16_t DUREE_PERTE_LIGNE_ENTREE_MS = 120;
 
 constexpr int16_t VITESSE_MIN = 0;
@@ -67,14 +67,13 @@ constexpr uint8_t NOMBRE_LECTURES_REPERE_STATIONNEMENT = 2;
 constexpr uint8_t FREQUENCE_CLIGNOTEMENT_MODE_HZ = 4;
 constexpr uint16_t PERIODE_SUIVI_MS = 20;
 
-constexpr uint8_t VITESSE_SUIVI_LIGNE = 50;
-constexpr uint8_t VITESSE_APPROCHE_COIN = 35;
-constexpr uint8_t VITESSE_TOURNER = 52;
+constexpr uint8_t VITESSE_SUIVI_LIGNE = 40;
+constexpr uint8_t VITESSE_APPROCHE_COIN = 40;
+constexpr uint8_t VITESSE_TOURNER = 50;
 constexpr uint8_t VITESSE_ENTREE_LOCAL = 40;
 constexpr uint8_t VITESSE_SORTIE_LOCAL = 40;
-constexpr uint8_t VITESSE_SORTIE_STATIONNEMENT = 35;
 
-constexpr uint16_t DUREE_TOURNER_90_MS = 620;
+constexpr uint16_t DUREE_TOURNER_90_MS = 1100;
 constexpr uint16_t DUREE_DEMI_TOUR_MS = DUREE_TOURNER_90_MS * 2;
 constexpr uint16_t DUREE_TOURNER_15_MS =
     (DUREE_TOURNER_90_MS * 15) / 90;
@@ -85,8 +84,6 @@ constexpr uint16_t DUREE_AVANCE_CENTRE_ENTREE_MS = 250;
 constexpr uint16_t DUREE_RECUL_LOCAL_TRAVAIL_MS = 350;
 constexpr uint16_t DUREE_AVANCE_LOCAL_RANGEMENT_MS = 1400;
 constexpr uint16_t DUREE_RECUL_LOCAL_RANGEMENT_MS = 800;
-constexpr uint16_t DUREE_RECUL_SORTIE_STATIONNEMENT_MS = 400;
-constexpr uint16_t DUREE_AVANCE_ALIGNEMENT_SORTIE_MS = 120;
 
 constexpr uint8_t DISTANCE_POTEAU_CM = 35;
 constexpr uint8_t HYSTERESIS_DISTANCE_POTEAU_CM = 5;
@@ -100,7 +97,6 @@ constexpr uint8_t NOMBRE_NOTES_ALERTE = 3;
 constexpr uint16_t TIMEOUT_SEGMENT_SUD_MS = 12000;
 constexpr uint16_t TIMEOUT_SEGMENT_PRINCIPAL_MS = 20000;
 constexpr uint16_t TIMEOUT_STATIONNEMENT_MS = 4000;
-constexpr uint16_t TIMEOUT_RECHERCHE_LIGNE_SORTIE_MS = 5000;
 constexpr uint16_t PAS_STATIONNEMENT_MS = 10;
 constexpr uint16_t DUREE_DECALAGE_CENTRE_STATIONNEMENT_MS = 250;
 

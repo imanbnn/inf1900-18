@@ -20,6 +20,7 @@
 namespace
 {
     constexpr uint8_t POURCENTAGE_MAX = 100;
+    constexpr int8_t COMPENSATION_MOTEUR_DROIT = 1;
 
     uint8_t limiterPourcentage(uint8_t vitessePourcentage)
     {
@@ -28,6 +29,28 @@ namespace
         }
 
         return vitessePourcentage;
+    }
+
+
+    int8_t compenserVitesseDroit(int8_t vitesseDroite)
+    {
+        if (vitesseDroite > 0) {
+            if (vitesseDroite <= (POURCENTAGE_MAX - COMPENSATION_MOTEUR_DROIT)) {
+                return vitesseDroite + COMPENSATION_MOTEUR_DROIT;
+            }
+
+            return POURCENTAGE_MAX;
+        }
+
+        if (vitesseDroite < 0) {
+            if (vitesseDroite >= -(POURCENTAGE_MAX - COMPENSATION_MOTEUR_DROIT)) {
+                return vitesseDroite - COMPENSATION_MOTEUR_DROIT;
+            }
+
+            return -POURCENTAGE_MAX;
+        }
+
+        return 0;
     }
 }
 
@@ -98,6 +121,9 @@ void ControleMoteurs::tournerDroite(uint8_t vitessePourcent)
 void ControleMoteurs::ajusterVitesses(int8_t vitesseGauche,
                                       int8_t vitesseDroite)
 {
+    const int8_t vitesseDroiteCompensee =
+        compenserVitesseDroit(vitesseDroite);
+
     moteurGauche_.ajusterVitessePourcent(vitesseGauche);
-    moteurDroit_.ajusterVitessePourcent(vitesseDroite);
+    moteurDroit_.ajusterVitessePourcent(vitesseDroiteCompensee);
 }

@@ -36,46 +36,92 @@ namespace
     constexpr uint8_t INDICE_LOCAL_C = 2;
     constexpr uint8_t INDICE_LOCAL_D = 3;
 
-    void initialiserParametresParDefaut(ParametresProjet& parametres)
-    {
-        parametres.sensParcours = SensParcours::HORAIRE;
-        parametres.numeroStationnement = NUMERO_STATIONNEMENT_PAR_DEFAUT;
+    constexpr uint16_t DUREE_AVANCE_15_CM_MS = 2000;
+    constexpr uint16_t TIMEOUT_RECHERCHE_LIGNE_LATERALE_MS = 4000;
+    constexpr uint8_t MASQUE_CAPTEUR_EXTERIEUR_GAUCHE = 0b00001;
+    constexpr uint8_t MASQUE_CAPTEUR_EXTERIEUR_DROITE = 0b10000;
 
-        for (uint8_t i = 0; i < NOMBRE_NOTES_MIDI; i++) {
-            parametres.notesMidi[i] = NOTE_PAR_DEFAUT;
-        }
+
+    bool ligneCompleteDetectee(SuiveurLigne& suiveurLigne)
+    {
+        return suiveurLigne.lireCapteurs() == MASQUE_CINQ_BITS;
     }
 
 
-    bool sortirDuStationnementEtRejoindreLigne(Deplacements& deplacements,
-                                               ControleMoteurs& moteurs,
-                                               SuiveurLigne& suiveurLigne)
+    uint8_t compterBitsActifs(uint8_t valeur)
     {
-        deplacements.reculerPendant(VITESSE_SORTIE_STATIONNEMENT,
-                                    DUREE_RECUL_SORTIE_STATIONNEMENT_MS);
+        uint8_t compteur = 0;
 
-        deplacements.demiTour();
+        while (valeur != 0) {
+            compteur += valeur & 1;
+            valeur >>= 1;
+        }
 
-        moteurs.avancer(VITESSE_SORTIE_STATIONNEMENT);
+        return compteur;
+    }
 
-        uint16_t tempsEcouleMs = 0;
 
-        while (!suiveurLigne.estSurObjet()) {
+    void reculerJusquaLigneComplete(ControleMoteurs& moteurs,
+                                    SuiveurLigne& suiveurLigne)
+    {
+        moteurs.reculer(VITESSE_SUIVI_LIGNE);
+
+        while (!ligneCompleteDetectee(suiveurLigne)) {
             attendreMillisecondes(PERIODE_SUIVI_MS);
-            tempsEcouleMs += PERIODE_SUIVI_MS;
-
-            if (tempsEcouleMs >= TIMEOUT_RECHERCHE_LIGNE_SORTIE_MS) {
-                moteurs.arreter();
-                return false;
-            }
         }
 
         moteurs.arreter();
+    }
 
-        deplacements.avancerPendant(VITESSE_SORTIE_STATIONNEMENT,
-                                    DUREE_AVANCE_ALIGNEMENT_SORTIE_MS);
 
-        return true;
+    bool ligneLateraleTrouvee(SuiveurLigne& suiveurLigne,
+                              bool chercherADroite)
+    {
+        const uint8_t lectureCapteurs = suiveurLigne.lireCapteurs();
+
+        if (chercherADroite) {
+            const bool capteurExterieurActif =
+                (lectureCapteurs & MASQUE_CAPTEUR_EXTERIEUR_DROITE) != 0;
+            const uint8_t nombreCapteursDroite =
+                compterBitsActifs(lectureCapteurs & MASQUE_SUIVI_DROITE);
+
+            return capteurExterieurActif && (nombreCapteursDroite == 1);
+        }
+
+        const bool capteurExterieurActif =
+            (lectureCapteurs & MASQUE_CAPTEUR_EXTERIEUR_GAUCHE) != 0;
+        const uint8_t nombreCapteursGauche =
+            compterBitsActifs(lectureCapteurs & MASQUE_SUIVI_GAUCHE);
+
+        return capteurExterieurActif && (nombreCapteursGauche == 1);
+    }
+
+
+    bool rechercherLigneLateraleApresVirage(ControleMoteurs& moteurs,
+                                            SuiveurLigne& suiveurLigne,
+                                            bool chercherADroite)
+    {
+        if (chercherADroite) {
+            moteurs.tournerDroite(VITESSE_TOURNER);
+        }
+        else {
+            moteurs.tournerGauche(VITESSE_TOURNER);
+        }
+
+        uint16_t tempsEcouleMs = 0;
+
+        while (tempsEcouleMs < TIMEOUT_RECHERCHE_LIGNE_LATERALE_MS) {
+            if (ligneLateraleTrouvee(suiveurLigne, chercherADroite)) {
+                moteurs.arreter();
+                return true;
+            }
+
+            attendreMillisecondes(PERIODE_SUIVI_MS);
+            tempsEcouleMs += PERIODE_SUIVI_MS;
+        }
+
+        moteurs.arreter();
+        return false;
     }
 
 
@@ -161,18 +207,23 @@ void executerModeExecution(Del& del,
                            StockageProjet& stockage)
 {
     ParametresProjet parametres = {};
-    initialiserParametresParDefaut(parametres);
-    (void)stockage.lireParametres(parametres);
+
+    if (!stockage.lireParametres(parametres)) {
+        return;
+    }
 
     ResultatsProjet resultats = {};
 
     const bool estHoraire =
         (parametres.sensParcours == SensParcours::HORAIRE);
+
     const CoteSuivi coteSuiviPerimetre =
-        estHoraire ? CoteSuivi::DROITE : CoteSuivi::GAUCHE;
-    const CoteSuivi coteSuiviLocaux =
         estHoraire ? CoteSuivi::GAUCHE : CoteSuivi::DROITE;
+    const CoteSuivi coteSuiviLocaux =
+        estHoraire ? CoteSuivi::DROITE : CoteSuivi::GAUCHE;
     const bool estEntreeLocauxAGauche = estHoraire;
+
+    const bool chercherLigneADroiteApresPremierVirage = !estHoraire;
 
     Deplacements deplacements(moteurs);
     SuiviLigneParcours suiviParcours(suiveurLigne, moteurs, del);
@@ -207,13 +258,19 @@ void executerModeExecution(Del& del,
         nullptr
     };
 
-    if (!sortirDuStationnementEtRejoindreLigne(deplacements,
-                                               moteurs,
-                                               suiveurLigne)) {
-        return;
-    }
+    reculerJusquaLigneComplete(moteurs, suiveurLigne);
+
+    deplacements.avancerPendant(VITESSE_SUIVI_LIGNE,
+                                DUREE_AVANCE_15_CM_MS);
 
     effectuerVirageCoin(deplacements, estHoraire);
+
+    if (!rechercherLigneLateraleApresVirage(
+            moteurs,
+            suiveurLigne,
+            chercherLigneADroiteApresPremierVirage)) {
+        return;
+    }
 
     if (!suivreSegment(suiviParcours,
                        coteSuiviPerimetre,
